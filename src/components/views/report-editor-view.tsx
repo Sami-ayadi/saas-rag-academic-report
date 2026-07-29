@@ -178,16 +178,24 @@ export function ReportEditorView() {
       })
       if (res.ok) {
         const data = await res.json()
-        const target = sections.find((s) => s.id === targetId)
-        if (target) {
-          setDiffContent({
-            original: target.content,
-            newContent: data.section?.content || data.content || target.content,
-          })
+        // Use originalContent from the API (DB-stored) for accurate diff
+        const originalContent = data.originalContent || ''
+        const newContent = data.section?.content || ''
+        if (originalContent && newContent && originalContent !== newContent) {
+          setDiffContent({ original: originalContent, newContent })
+          // Also update local sections state with new data from DB
+          setSections((prev) =>
+            prev.map((s) =>
+              s.id === targetId ? { ...s, content: originalContent, status: 'completed' as const } : s
+            )
+          )
+          toast.success('Section régénérée — vérifiez les modifications')
+        } else {
+          toast.error('Le contenu généré est identique à l\'original')
         }
-        toast.success('Section régénérée')
       } else {
-        toast.error('Erreur lors de la régénération')
+        const errData = await res.json().catch(() => ({}))
+        toast.error(errData.error || 'Erreur lors de la régénération')
       }
     } catch {
       toast.error('Erreur réseau')
@@ -196,15 +204,30 @@ export function ReportEditorView() {
     }
   }
 
-  function acceptDiff() {
-    if (!diffContent || !activeSectionId) return
-    setSections((prev) =>
-      prev.map((s) =>
-        s.id === activeSectionId ? { ...s, content: diffContent.newContent, status: 'completed' as const } : s
-      )
-    )
-    setDiffContent(null)
-    toast.success('Modifications acceptées')
+  async function acceptDiff() {
+    if (!diffContent || !activeSectionId || !selectedReportId) return
+    // Save accepted changes to DB
+    try {
+      const res = await fetch(`/api/reports/${selectedReportId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sectionId: activeSectionId, sectionContent: diffContent.newContent }),
+      })
+      if (res.ok) {
+        // Update local state
+        setSections((prev) =>
+          prev.map((s) =>
+            s.id === activeSectionId ? { ...s, content: diffContent.newContent, status: 'completed' as const } : s
+          )
+        )
+        setDiffContent(null)
+        toast.success('Modifications acceptées et sauvegardées')
+      } else {
+        toast.error('Erreur lors de la sauvegarde')
+      }
+    } catch {
+      toast.error('Erreur réseau')
+    }
   }
 
   function rejectDiff() {
