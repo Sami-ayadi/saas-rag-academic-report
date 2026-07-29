@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Architecture Système</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1400px;
+    height: 900px;
+    background: #FFFFFF;
+    font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, sans-serif;
+    color: #243447;
+    overflow: hidden;
+  }
+  .diagram-title {
+    text-align: center;
+    font-size: 28px;
+    font-weight: 700;
+    color: #1F2937;
+    padding: 30px 0 10px;
+    letter-spacing: -0.5px;
+  }
+  .diagram-subtitle {
+    text-align: center;
+    font-size: 14px;
+    color: #6B7280;
+    margin-bottom: 28px;
+  }
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    padding: 0 60px;
+  }
+  /* Layer rows */
+  .layer-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    position: relative;
+  }
+  .layer-label {
+    width: 140px;
+    min-width: 140px;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    text-align: right;
+    padding-right: 18px;
+    color: #4C6EF5;
+  }
+  .layer-content {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    position: relative;
+  }
+  /* Nodes */
+  .node {
+    background: #EFF6FF;
+    border: 2px solid #94A3B8;
+    border-radius: 10px;
+    padding: 16px 24px;
+    text-align: center;
+    min-width: 180px;
+    position: relative;
+  }
+  .node-icon {
+    font-size: 22px;
+    margin-bottom: 6px;
+  }
+  .node-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1F2937;
+    margin-bottom: 3px;
+  }
+  .node-desc {
+    font-size: 12px;
+    color: #6B7280;
+  }
+  /* Fill variants */
+  .fill-green { background: #F0FDF4; border-color: #86EFAC; }
+  .fill-purple { background: #F5F3FF; border-color: #C4B5FD; }
+  .fill-amber { background: #FFF7ED; border-color: #FCD34D; }
+  .fill-blue { background: #EFF6FF; border-color: #93C5FD; }
+  /* Layer backgrounds */
+  .layer-bg {
+    flex: 1;
+    border-radius: 14px;
+    padding: 20px;
+    display: flex;
+    gap: 18px;
+    align-items: center;
+    justify-content: center;
+  }
+  .layer-bg-blue { background: #F8FAFC; border: 1.5px dashed #CBD5E1; }
+  .layer-bg-green { background: #F9FBF2; border: 1.5px dashed #A7F3D0; }
+  .layer-bg-purple { background: #FAF5FF; border: 1.5px dashed #DDD6FE; }
+  .layer-bg-amber { background: #FFFBEB; border: 1.5px dashed #FDE68A; }
+
+  /* External label */
+  .ext-label {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    text-align: right;
+    padding-right: 18px;
+    color: #92400E;
+    width: 140px;
+    min-width: 140px;
+  }
+
+  /* Arrows between layers */
+  .arrows-down {
+    display: flex;
+    justify-content: center;
+    gap: 200px;
+    height: 44px;
+    position: relative;
+  }
+  .arrow-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .arrow-line {
+    width: 2px;
+    height: 28px;
+    background: #94A3B8;
+  }
+  .arrow-head {
+    width: 0; height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid #94A3B8;
+  }
+  .arrow-label {
+    font-size: 10px;
+    color: #6B7280;
+    white-space: nowrap;
+    margin-top: 2px;
+  }
+  /* Vertical layout */
+  .vertical-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    gap: 0;
+  }
+  .arrow-section {
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 40px;
+  }
+  .arrow-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .arrow-up {
+    width: 2px;
+    height: 24px;
+    background: #94A3B8;
+  }
+  .arrow-down-head {
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid #94A3B8;
+  }
+  .arrow-dash-label {
+    font-size: 10px;
+    color: #92400E;
+    font-style: italic;
+    background: #FFFBEB;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid #FDE68A;
+  }
+</style>
+</head>
+<body>
+<div class="diagram-title">Architecture Système</div>
+<div class="diagram-subtitle">Plateforme SaaS de Génération de Rapports — Vue d'ensemble</div>
+
+<div class="container">
+  <div class="vertical-stack">
+
+    <!-- LAYER 1: Frontend -->
+    <div class="layer-row">
+      <div class="layer-label">Couche Frontend</div>
+      <div class="layer-bg layer-bg-blue">
+        <div class="node fill-blue">
+          <div class="node-title">Next.js 14</div>
+          <div class="node-desc">App Router & SSR</div>
+        </div>
+        <div class="node fill-blue">
+          <div class="node-title">TipTap Editor</div>
+          <div class="node-desc">Éditeur riche</div>
+        </div>
+        <div class="node fill-blue">
+          <div class="node-title">shadcn/ui</div>
+          <div class="node-desc">Composants UI</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrows Frontend → Backend -->
+    <div class="arrow-section">
+      <div class="arrow-group">
+        <span class="arrow-label" style="font-size:10px;color:#6B7280;">Appels API</span>
+        <span class="arrow-up"></span>
+        <span class="arrow-down-head"></span>
+      </div>
+      <div class="arrow-group">
+        <span class="arrow-label" style="font-size:10px;color:#6B7280;">WebSocket</span>
+        <span class="arrow-up"></span>
+        <span class="arrow-down-head"></span>
+      </div>
+      <div class="arrow-group">
+        <span class="arrow-label" style="font-size:10px;color:#6B7280;">Server Actions</span>
+        <span class="arrow-up"></span>
+        <span class="arrow-down-head"></span>
+      </div>
+    </div>
+
+    <!-- LAYER 2: Backend -->
+    <div class="layer-row">
+      <div class="layer-label">Couche Backend</div>
+      <div class="layer-bg layer-bg-green">
+        <div class="node fill-green">
+          <div class="node-title">API Routes</div>
+          <div class="node-desc">Next.js API Routes</div>
+        </div>
+        <div class="node fill-green">
+          <div class="node-title">BullMQ Workers</div>
+          <div class="node-desc">Files d'attente async</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrows Backend → Data -->
+    <div class="arrow-section">
+      <div class="arrow-group">
+        <span class="arrow-label" style="font-size:10px;color:#6B7280;">Requêtes SQL</span>
+        <span class="arrow-up"></span>
+        <span class="arrow-down-head"></span>
+      </div>
+      <div class="arrow-group">
+        <span class="arrow-label" style="font-size:10px;color:#6B7280;">Cache / Queue</span>
+        <span class="arrow-up"></span>
+        <span class="arrow-down-head"></span>
+      </div>
+      <div class="arrow-group">
+        <span class="arrow-label" style="font-size:10px;color:#6B7280;">Stockage objets</span>
+        <span class="arrow-up"></span>
+        <span class="arrow-down-head"></span>
+      </div>
+    </div>
+
+    <!-- LAYER 3: Data -->
+    <div class="layer-row">
+      <div class="layer-label">Couche Données</div>
+      <div class="layer-bg layer-bg-purple">
+        <div class="node fill-purple">
+          <div class="node-title">PostgreSQL (Neon)</div>
+          <div class="node-desc">+ extension pgvector</div>
+        </div>
+        <div class="node fill-purple">
+          <div class="node-title">Redis (Upstash)</div>
+          <div class="node-desc">Cache & BullMQ</div>
+        </div>
+        <div class="node fill-purple">
+          <div class="node-title">Cloudflare R2</div>
+          <div class="node-desc">Stockage fichiers</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrows Backend → External -->
+    <div class="arrow-section">
+      <div class="arrow-group">
+        <span class="arrow-dash-label">API REST</span>
+        <span class="arrow-up" style="border-left:1px dashed #F59E0B;border-right:1px dashed #F59E0B;background:none;height:24px;width:0;border-top:none;border-bottom:none;"></span>
+        <span class="arrow-down-head" style="border-top-color:#F59E0B;"></span>
+      </div>
+      <div class="arrow-group">
+        <span class="arrow-dash-label">Embeddings</span>
+        <span class="arrow-up" style="border-left:1px dashed #F59E0B;border-right:1px dashed #F59E0B;background:none;height:24px;width:0;border-top:none;border-bottom:none;"></span>
+        <span class="arrow-down-head" style="border-top-color:#F59E0B;"></span>
+      </div>
+      <div class="arrow-group">
+        <span class="arrow-dash-label">Webhooks</span>
+        <span class="arrow-up" style="border-left:1px dashed #F59E0B;border-right:1px dashed #F59E0B;background:none;height:24px;width:0;border-top:none;border-bottom:none;"></span>
+        <span class="arrow-down-head" style="border-top-color:#F59E0B;"></span>
+      </div>
+    </div>
+
+    <!-- LAYER 4: External Services -->
+    <div class="layer-row">
+      <div class="ext-label">Services Externes</div>
+      <div class="layer-bg layer-bg-amber">
+        <div class="node fill-amber">
+          <div class="node-title">Claude API</div>
+          <div class="node-desc">Anthropic — LLM</div>
+        </div>
+        <div class="node fill-amber">
+          <div class="node-title">Voyage AI</div>
+          <div class="node-desc">Embeddings</div>
+        </div>
+        <div class="node fill-amber">
+          <div class="node-title">Stripe Billing</div>
+          <div class="node-desc">Facturation</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

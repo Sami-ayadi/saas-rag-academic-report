@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
+<style>
+@page { size: 794px 1123px; margin: 0; }
+html, body { margin: 0; padding: 0; width: 794px; height: 1123px; background: #ffffff; font-family: 'Inter', sans-serif; }
+.cover-page { position: relative; width: 794px; height: 1123px; overflow: hidden; }
+
+/* Layer 1 - Background */
+.cover-bg { position: absolute; inset: 0; overflow: hidden; z-index: 1; }
+.cover-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(64,96,112,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(64,96,112,0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+.cover-accent-bar {
+  position: absolute;
+  left: 0; top: 0;
+  width: 8px; height: 100%;
+  background: linear-gradient(180deg, #406070 0%, #2f82ab 50%, #406070 100%);
+}
+.cover-corner-tl {
+  position: absolute;
+  top: 40px; left: 40px;
+  width: 80px; height: 80px;
+  border-top: 2px solid #406070;
+  border-left: 2px solid #406070;
+}
+.cover-corner-br {
+  position: absolute;
+  bottom: 40px; right: 40px;
+  width: 80px; height: 80px;
+  border-bottom: 2px solid #406070;
+  border-right: 2px solid #406070;
+}
+.cover-watermark {
+  position: absolute;
+  bottom: -20px; right: 60px;
+  font-size: 180px;
+  font-weight: 900;
+  color: rgba(64,96,112,0.04);
+  letter-spacing: -8px;
+  line-height: 1;
+}
+
+/* Layer 2 - Structure */
+.cover-line-v {
+  position: absolute;
+  left: 99px; top: 80px;
+  width: 4px; height: 960px;
+  background: #406070;
+  border-radius: 2px;
+}
+
+/* Layer 3 - Content */
+.cover-content { position: absolute; inset: 0; z-index: 3; }
+.kicker {
+  position: absolute;
+  left: 145px; top: 160px;
+  font-size: 13pt;
+  font-weight: 400;
+  letter-spacing: 4pt;
+  color: #7a8185;
+  text-transform: uppercase;
+}
+.hero-title {
+  position: absolute;
+  left: 145px; top: 220px;
+  max-width: 580px;
+  font-size: 44pt;
+  font-weight: 900;
+  color: #222526;
+  line-height: 1.1;
+  letter-spacing: -1px;
+}
+.hero-title span { color: #2f82ab; }
+.summary {
+  position: absolute;
+  left: 145px; top: 490px;
+  max-width: 520px;
+  font-size: 14pt;
+  font-weight: 300;
+  color: #4a5568;
+  line-height: 1.7;
+  opacity: 0.85;
+}
+.meta-block {
+  position: absolute;
+  left: 145px; top: 680px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.meta-item {
+  font-size: 11pt;
+  font-weight: 500;
+  color: #7a8185;
+  letter-spacing: 1px;
+}
+.meta-item strong { color: #406070; }
+.footer {
+  position: absolute;
+  bottom: 50px; left: 145px;
+  font-size: 10pt;
+  font-weight: 400;
+  letter-spacing: 3px;
+  color: #b8c2c7;
+  text-transform: uppercase;
+}
+.tags {
+  position: absolute;
+  right: 60px; top: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+}
+.tag {
+  font-size: 9pt;
+  font-weight: 600;
+  color: #406070;
+  background: #edeff0;
+  padding: 5px 14px;
+  border-radius: 4px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+</style>
+</head>
+<body>
+<div class="cover-page">
+  <!-- Layer 1: Background -->
+  <div class="cover-bg">
+    <div class="cover-grid"></div>
+    <div class="cover-accent-bar"></div>
+    <div class="cover-corner-tl"></div>
+    <div class="cover-corner-br"></div>
+    <div class="cover-watermark">ARCH</div>
+  </div>
+
+  <!-- Layer 2: Structure -->
+  <div class="cover-line-v"></div>
+
+  <!-- Layer 3: Content -->
+  <div class="cover-content">
+    <div class="kicker">Document d'architecture technique</div>
+    <div class="hero-title">Plateforme SaaS<br><span>RAG</span> pour<br>Generation de<br>Rapports Academiques</div>
+    <div class="summary">Architecture complete, detaillee jusqu'au niveau fichier et module, concue pour le vibecoding avec Claude Code. Stack Next.js 14, PostgreSQL + pgvector, Claude Sonnet, et pipeline RAG optimise pour 25 utilisateurs en phase test.</div>
+    <div class="meta-block">
+      <div class="meta-item"><strong>Stack</strong> : Next.js 14 + TypeScript + Tailwind + shadcn/ui</div>
+      <div class="meta-item"><strong>Base de donnees</strong> : PostgreSQL (Neon) + pgvector</div>
+      <div class="meta-item"><strong>LLM</strong> : Claude Sonnet (Anthropic API)</div>
+      <div class="meta-item"><strong>Phase</strong> : Test ~25 utilisateurs</div>
+    </div>
+    <div class="tags">
+      <div class="tag">RAG</div>
+      <div class="tag">TipTap</div>
+      <div class="tag">BullMQ</div>
+      <div class="tag">Stripe</div>
+      <div class="tag">pgvector</div>
+    </div>
+    <div class="footer">Vibecoding Ready &mdash; Claude Code Architecture v1.0</div>
+  </div>
+</div>
+</body>
+</html>

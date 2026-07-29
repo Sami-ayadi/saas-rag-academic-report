@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Flux Utilisateur</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1400px;
+    height: 1050px;
+    background: #FFFFFF;
+    font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, sans-serif;
+    color: #243447;
+    overflow: hidden;
+  }
+  .diagram-title {
+    text-align: center;
+    font-size: 28px;
+    font-weight: 700;
+    color: #1F2937;
+    padding: 24px 0 6px;
+    letter-spacing: -0.5px;
+  }
+  .diagram-subtitle {
+    text-align: center;
+    font-size: 14px;
+    color: #6B7280;
+    margin-bottom: 24px;
+  }
+  .container {
+    padding: 0 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+  /* Phase block */
+  .phase {
+    width: 100%;
+    background: #F8FAFC;
+    border: 1.5px solid #E2E8F0;
+    border-radius: 14px;
+    padding: 18px 28px 18px 28px;
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+  }
+  .phase-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 180px;
+    gap: 6px;
+    padding-top: 4px;
+  }
+  .phase-header {
+    background: #1F2937;
+    color: #FFFFFF;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 8px 16px;
+    border-radius: 8px;
+    text-align: center;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+  }
+  .phase-num {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #4C6EF5;
+    color: white;
+    font-size: 16px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .phase-steps {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+  .step-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    width: 100%;
+  }
+  /* Node */
+  .node {
+    background: #EFF6FF;
+    border: 2px solid #94A3B8;
+    border-radius: 10px;
+    padding: 12px 22px;
+    text-align: center;
+    min-width: 155px;
+  }
+  .node-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1F2937;
+    margin-bottom: 2px;
+  }
+  .node-desc {
+    font-size: 11px;
+    color: #6B7280;
+  }
+  .fill-green { background: #F0FDF4; border-color: #86EFAC; }
+  .fill-purple { background: #F5F3FF; border-color: #C4B5FD; }
+  .fill-amber { background: #FFF7ED; border-color: #FCD34D; }
+  .fill-blue { background: #EFF6FF; border-color: #93C5FD; }
+  /* Arrow */
+  .arrow-wrap {
+    display: flex;
+    align-items: center;
+  }
+  .arrow-line {
+    width: 40px;
+    height: 2px;
+    background: #94A3B8;
+  }
+  .arrow-head {
+    width: 0; height: 0;
+    border-top: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+    border-left: 8px solid #94A3B8;
+  }
+  /* Vertical arrow between phases */
+  .phase-connector {
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .conn-vline {
+    width: 2px;
+    height: 22px;
+    background: #94A3B8;
+  }
+  .conn-vhead {
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid #94A3B8;
+  }
+  .conn-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  /* Sub-flow label */
+  .sub-label {
+    font-size: 10px;
+    color: #6B7280;
+    font-style: italic;
+    margin: 0 8px;
+  }
+  /* Second row offset */
+  .step-row-secondary {
+    margin-left: 40px;
+  }
+  /* Parallel nodes */
+  .parallel-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .parallel-sep {
+    width: 1px;
+    height: 40px;
+    background: #CBD5E1;
+  }
+</style>
+</head>
+<body>
+<div class="diagram-title">Flux Utilisateur</div>
+<div class="diagram-subtitle">Parcours complet de l'étudiant — de l'inscription à l'export</div>
+
+<div class="container">
+
+  <!-- PHASE 1: Authentification -->
+  <div class="phase">
+    <div class="phase-info">
+      <div class="phase-num">1</div>
+      <div class="phase-header">Authentification</div>
+    </div>
+    <div class="phase-steps">
+      <div class="step-row">
+        <div class="node fill-blue">
+          <div class="node-title">Inscription</div>
+          <div class="node-desc">Formulaire</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-green">
+          <div class="node-title">Auth (Clerk)</div>
+          <div class="node-desc">Connexion SSO</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-amber">
+          <div class="node-title">Choix abonnement</div>
+          <div class="node-desc">Stripe Checkout</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connector -->
+  <div class="phase-connector">
+    <div class="conn-col">
+      <div class="conn-vline"></div>
+      <div class="conn-vhead"></div>
+    </div>
+  </div>
+
+  <!-- PHASE 2: Projet -->
+  <div class="phase">
+    <div class="phase-info">
+      <div class="phase-num">2</div>
+      <div class="phase-header">Projet</div>
+    </div>
+    <div class="phase-steps">
+      <div class="step-row">
+        <div class="node fill-blue">
+          <div class="node-title">Brief projet</div>
+          <div class="node-desc">Saisie du sujet</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-green">
+          <div class="node-title">Upload fichiers</div>
+          <div class="node-desc">Documents support</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-purple">
+          <div class="node-title">Extraction texte</div>
+          <div class="node-desc">OCR / Parse</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connector -->
+  <div class="phase-connector">
+    <div class="conn-col">
+      <div class="conn-vline"></div>
+      <div class="conn-vhead"></div>
+    </div>
+  </div>
+
+  <!-- PHASE 3: Génération -->
+  <div class="phase">
+    <div class="phase-info">
+      <div class="phase-num">3</div>
+      <div class="phase-header">Génération</div>
+    </div>
+    <div class="phase-steps">
+      <div class="step-row">
+        <div class="node fill-blue">
+          <div class="node-title">Génération sommaire</div>
+          <div class="node-desc">Pipeline RAG</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-purple">
+          <div class="node-title">Édition sommaire</div>
+          <div class="node-desc">Modifications libres</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-amber">
+          <div class="node-title">Validation</div>
+          <div class="node-desc">Sommaire approuvé</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-green">
+          <div class="node-title">Génération rapport</div>
+          <div class="node-desc">Queue BullMQ</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connector -->
+  <div class="phase-connector">
+    <div class="conn-col">
+      <div class="conn-vline"></div>
+      <div class="conn-vhead"></div>
+    </div>
+  </div>
+
+  <!-- PHASE 4: Edition & Export -->
+  <div class="phase">
+    <div class="phase-info">
+      <div class="phase-num">4</div>
+      <div class="phase-header">Édition & Export</div>
+    </div>
+    <div class="phase-steps">
+      <div class="step-row">
+        <div class="node fill-blue">
+          <div class="node-title">Split-view TipTap</div>
+          <div class="node-desc">Éditeur principal</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-purple">
+          <div class="node-title">Édition ciblée</div>
+          <div class="node-desc">Claude Assistant</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-green">
+          <div class="node-title">Accepter / Rejeter</div>
+          <div class="node-desc">Validation section</div>
+        </div>
+        <div class="arrow-wrap">
+          <div class="arrow-line"></div>
+          <div class="arrow-head"></div>
+        </div>
+        <div class="node fill-amber">
+          <div class="node-title">Export DOCX/PDF</div>
+          <div class="node-desc">Téléchargement</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

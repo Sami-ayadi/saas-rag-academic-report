@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Schéma Entité-Relation</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1400px;
+    height: 1050px;
+    background: #FFFFFF;
+    font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, sans-serif;
+    color: #243447;
+    overflow: hidden;
+    position: relative;
+  }
+  .diagram-title {
+    text-align: center;
+    font-size: 26px;
+    font-weight: 700;
+    color: #1F2937;
+    padding: 20px 0 4px;
+    letter-spacing: -0.5px;
+  }
+  .diagram-subtitle {
+    text-align: center;
+    font-size: 13px;
+    color: #6B7280;
+    margin-bottom: 16px;
+  }
+  /* Canvas for lines */
+  svg.relations {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1400px;
+    height: 1050px;
+    pointer-events: none;
+    z-index: 1;
+  }
+  /* Tables container */
+  .tables-container {
+    position: absolute;
+    top: 0; left: 0;
+    width: 1400px;
+    height: 1050px;
+    z-index: 2;
+  }
+  /* Table entity */
+  .entity {
+    position: absolute;
+    width: 270px;
+    background: #EFF6FF;
+    border: 2px solid #94A3B8;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .entity-header {
+    background: #1F2937;
+    color: #FFFFFF;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+  }
+  .entity-columns {
+    padding: 8px 0;
+  }
+  .entity-col {
+    padding: 5px 14px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-bottom: 1px solid #E2E8F0;
+  }
+  .entity-col:last-child {
+    border-bottom: none;
+  }
+  .col-key {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #F59E0B;
+    flex-shrink: 0;
+  }
+  .col-fk {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 2px;
+    background: #4C6EF5;
+    flex-shrink: 0;
+  }
+  .col-name {
+    font-weight: 600;
+    color: #1F2937;
+  }
+  .col-type {
+    color: #6B7280;
+    font-size: 11px;
+    margin-left: auto;
+    font-family: 'Courier New', monospace;
+  }
+  /* Fill variants */
+  .fill-green .entity-header { background: #166534; }
+  .fill-green { background: #F0FDF4; border-color: #86EFAC; }
+  .fill-purple .entity-header { background: #5B21B6; }
+  .fill-purple { background: #F5F3FF; border-color: #C4B5FD; }
+  .fill-amber .entity-header { background: #92400E; }
+  .fill-amber { background: #FFF7ED; border-color: #FCD34D; }
+
+  /* Legend */
+  .legend {
+    position: absolute;
+    bottom: 14px;
+    right: 30px;
+    display: flex;
+    gap: 18px;
+    align-items: center;
+    font-size: 12px;
+    color: #6B7280;
+    z-index: 3;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .legend-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+  }
+  .legend-sq {
+    width: 8px; height: 8px;
+    border-radius: 2px;
+  }
+</style>
+</head>
+<body>
+
+<div class="diagram-title">Schéma Entité-Relation</div>
+<div class="diagram-subtitle">Modèle de données de la plateforme</div>
+
+<!-- SVG for relationship lines -->
+<svg class="relations" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#94A3B8"/>
+    </marker>
+    <!-- 1:N marker -->
+    <marker id="one-mark" markerWidth="8" markerHeight="12" refX="1" refY="6" orient="auto">
+      <line x1="1" y1="1" x2="1" y2="11" stroke="#94A3B8" stroke-width="2"/>
+    </marker>
+  </defs>
+
+  <!--
+    Table positions (x, y, w=270, h varies):
+    users:           (65, 80)
+    projects:        (460, 80)
+    reference_reports: (935, 80)
+
+    uploaded_files:  (65, 380)
+    sommaire_versions: (460, 380)
+    generation_jobs: (935, 380)
+
+    report_sections:  (65, 670)
+    edit_history:    (460, 670)
+    reference_chunks: (935, 670)
+  -->
+
+  <!-- 1. users → projects (horizontal) -->
+  <line x1="335" y1="130" x2="460" y2="130"
+        stroke="#94A3B8" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="380" y="122" text-anchor="middle" font-size="10" fill="#6B7280">1:N</text>
+
+  <!-- 2. projects → uploaded_files (diagonal down-left) -->
+  <path d="M 530 220 L 530 300 Q 530 320 510 320 L 250 320 Q 230 320 230 340 L 230 380"
+        fill="none" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="380" y="312" text-anchor="middle" font-size="10" fill="#6B7280">1:N</text>
+
+  <!-- 3. projects → sommaire_versions (straight down) -->
+  <line x1="560" y1="220" x2="560" y2="380"
+        stroke="#94A3B8" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="572" y="305" font-size="10" fill="#6B7280">1:N</text>
+
+  <!-- 4. projects → generation_jobs (down-right diagonal with curve) -->
+  <path d="M 610 220 L 610 300 Q 610 320 630 320 L 1040 320 Q 1060 320 1060 340 L 1060 380"
+        fill="none" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="830" y="312" text-anchor="middle" font-size="10" fill="#6B7280">1:N</text>
+
+  <!-- 5. projects → report_sections (long down-left with curve) -->
+  <path d="M 490 220 L 490 610 Q 490 630 470 630 L 230 630 Q 210 630 210 650 L 210 670"
+        fill="none" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="350" y="622" text-anchor="middle" font-size="10" fill="#6B7280">1:N</text>
+
+  <!-- 6. report_sections → edit_history (horizontal right) -->
+  <line x1="335" y1="740" x2="460" y2="740"
+        stroke="#94A3B8" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="380" y="732" text-anchor="middle" font-size="10" fill="#6B7280">1:N</text>
+
+  <!-- 7. reference_reports → reference_chunks (straight down) -->
+  <line x1="1050" y1="180" x2="1050" y2="670"
+        stroke="#94A3B8" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="1062" y="430" font-size="10" fill="#6B7280">1:N</text>
+
+</svg>
+
+<!-- Tables -->
+<div class="tables-container">
+
+  <!-- users -->
+  <div class="entity" style="left:65px;top:80px;">
+    <div class="entity-header">users</div>
+    <div class="entity-columns">
+      <div class="entity-col"><span class="col-key"></span><span class="col-name">id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">email</span><span class="col-type">VARCHAR</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">subscription_tier</span><span class="col-type">ENUM</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">stripe_customer_id</span><span class="col-type">VARCHAR</span></div>
+    </div>
+  </div>
+
+  <!-- projects -->
+  <div class="entity fill-green" style="left:460px;top:80px;">
+    <div class="entity-header">projects</div>
+    <div class="entity-columns">
+      <div class="entity-col"><span class="col-key"></span><span class="col-name">id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-fk"></span><span class="col-name">user_id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">title</span><span class="col-type">VARCHAR</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">type</span><span class="col-type">ENUM</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">status</span><span class="col-type">ENUM</span></div>
+    </div>
+  </div>
+
+  <!-- reference_reports -->
+  <div class="entity fill-amber" style="left:935px;top:80px;">
+    <div class="entity-header">reference_reports</div>
+    <div class="entity-columns">
+      <div class="entity-col"><span class="col-key"></span><span class="col-name">id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">sector</span><span class="col-type">VARCHAR</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">report_type</span><span class="col-type">VARCHAR</span></div>
+    </div>
+  </div>
+
+  <!-- uploaded_files -->
+  <div class="entity fill-purple" style="left:65px;top:380px;">
+    <div class="entity-header">uploaded_files</div>
+    <div class="entity-columns">
+      <div class="entity-col"><span class="col-key"></span><span class="col-name">id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-fk"></span><span class="col-name">project_id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">file_url</span><span class="col-type">TEXT</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">extracted_text</span><span class="col-type">TEXT</span></div>
+    </div>
+  </div>
+
+  <!-- sommaire_versions -->
+  <div class="entity fill-purple" style="left:460px;top:380px;">
+    <div class="entity-header">sommaire_versions</div>
+    <div class="entity-columns">
+      <div class="entity-col"><span class="col-key"></span><span class="col-name">id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-fk"></span><span class="col-name">project_id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">content_json</span><span class="col-type">JSONB</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">version</span><span class="col-type">INT</span></div>
+    </div>
+  </div>
+
+  <!-- generation_jobs -->
+  <div class="entity fill-purple" style="left:935px;top:380px;">
+    <div class="entity-header">generation_jobs</div>
+    <div class="entity-columns">
+      <div class="entity-col"><span class="col-key"></span><span class="col-name">id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-fk"></span><span class="col-name">project_id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">type</span><span class="col-type">ENUM</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">status</span><span class="col-type">ENUM</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">progress</span><span class="col-type">INT</span></div>
+    </div>
+  </div>
+
+  <!-- report_sections -->
+  <div class="entity fill-purple" style="left:65px;top:670px;">
+    <div class="entity-header">report_sections</div>
+    <div class="entity-columns">
+      <div class="entity-col"><span class="col-key"></span><span class="col-name">id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-fk"></span><span class="col-name">project_id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">section_key</span><span class="col-type">VARCHAR</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">content_html</span><span class="col-type">TEXT</span></div>
+    </div>
+  </div>
+
+  <!-- edit_history -->
+  <div class="entity fill-green" style="left:460px;top:670px;">
+    <div class="entity-header">edit_history</div>
+    <div class="entity-columns">
+      <div class="entity-col"><span class="col-key"></span><span class="col-name">id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-fk"></span><span class="col-name">report_section_id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">instruction</span><span class="col-type">TEXT</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">before</span><span class="col-type">TEXT</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">after</span><span class="col-type">TEXT</span></div>
+    </div>
+  </div>
+
+  <!-- reference_chunks -->
+  <div class="entity fill-amber" style="left:935px;top:670px;">
+    <div class="entity-header">reference_chunks</div>
+    <div class="entity-columns">
+      <div class="entity-col"><span class="col-key"></span><span class="col-name">id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-fk"></span><span class="col-name">reference_report_id</span><span class="col-type">UUID</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">section_key</span><span class="col-type">VARCHAR</span></div>
+      <div class="entity-col"><span class="col-name" style="margin-left:13px;">embedding</span><span class="col-type">VECTOR</span></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><span class="legend-dot" style="background:#F59E0B;"></span> Clé primaire</div>
+  <div class="legend-item"><span class="legend-sq" style="background:#4C6EF5;"></span> Clé étrangère</div>
+  <div class="legend-item">——  Relation 1:N</div>
+</div>
+
+</body>
+</html>
