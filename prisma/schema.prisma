@@ -1,0 +1,177 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== ENUMERATIONS ====================
+
+enum Tier {
+  FREE
+  STARTER
+  PRO
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ProjectStatus {
+  DRAFT
+  SUMMARIZING
+  SUMMARY_READY
+  GENERATING
+  REPORT_READY
+  EXPORTED
+}
+
+// ==================== TABLES ====================
+
+model User {
+  id              String        @id @default(cuid())
+  email           String        @unique
+  name            String?
+  image           String?
+  tier            Tier          @default(FREE)
+  stripeCustomerId String?
+  stripePriceId   String?
+  stripeSubId     String?
+  creditsUsed     Int           @default(0)
+  creditsLimit    Int           @default(3)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  projects        Project[]
+  jobs            GenerationJob[]
+}
+
+model Project {
+  id              String        @id @default(cuid())
+  userId          String
+  title           String
+  brief           String?
+  academicLevel   String        @default("Master")
+  university      String?
+  field           String?
+  status          ProjectStatus @default(DRAFT)
+  language        String        @default("fr")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents       Document[]
+  summaries       Summary[]
+  reports         Report[]
+  jobs            GenerationJob[]
+
+  @@index([userId])
+}
+
+model Document {
+  id              String        @id @default(cuid())
+  projectId       String
+  filename        String
+  originalName    String
+  mimeType        String
+  size            Int
+  storageKey      String
+  status          String        @default("uploaded")
+  chunkCount      Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model Summary {
+  id              String        @id @default(cuid())
+  projectId       String
+  version         Int           @default(1)
+  content         String        @default("")
+  structure       String        @default("[]")
+  status          ProjectStatus @default(DRAFT)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reports         Report[]
+
+  @@index([projectId])
+}
+
+model Report {
+  id              String        @id @default(cuid())
+  projectId       String
+  summaryId       String?
+  title           String
+  content         String        @default("")
+  sections        String        @default("[]")
+  status          ProjectStatus @default(DRAFT)
+  wordCount       Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  summary         Summary?      @relation(fields: [summaryId], references: [id])
+
+  @@index([projectId])
+}
+
+model GenerationJob {
+  id              String        @id @default(cuid())
+  userId          String
+  projectId       String
+  type            String        @default("report")
+  status          JobStatus     @default(PENDING)
+  progress        Int           @default(0)
+  progressMessage String        @default("")
+  outputData      String?
+  errorMessage    String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([projectId])
+}
+
+model Embedding {
+  id              String        @id @default(cuid())
+  projectId       String
+  documentId      String?
+  chunkIndex      Int           @default(0)
+  content         String
+  embedding       String        @default("")
+  metadata        String        @default("{}")
+  createdAt       DateTime      @default(now())
+
+  @@index([projectId])
+  @@index([documentId])
+}
+
+model ApiUsage {
+  id              String        @id @default(cuid())
+  userId          String
+  projectId       String?
+  type            String
+  inputTokens     Int           @default(0)
+  outputTokens    Int           @default(0)
+  costUsd         Float         @default(0)
+  createdAt       DateTime      @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
