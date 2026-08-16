@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -13,6 +13,11 @@ enum Tier {
   FREE
   STARTER
   PRO
+}
+
+enum Role {
+  USER
+  ADMIN
 }
 
 enum JobStatus {
@@ -32,145 +37,230 @@ enum ProjectStatus {
   EXPORTED
 }
 
+enum IntakeStatus {
+  IN_PROGRESS
+  READY_FOR_REVIEW
+  APPROVED
+}
+
 // ==================== TABLES ====================
 
 model User {
-  id              String        @id @default(cuid())
-  email           String        @unique
-  name            String?
-  image           String?
-  tier            Tier          @default(FREE)
+  id               String    @id @default(cuid())
+  email            String?   @unique
+  emailVerified    DateTime?
+  name             String?
+  image            String?
+  tier             Tier      @default(FREE)
+  role             Role      @default(USER)
+  isActive         Boolean   @default(true)
   stripeCustomerId String?
-  stripePriceId   String?
-  stripeSubId     String?
-  creditsUsed     Int           @default(0)
-  creditsLimit    Int           @default(3)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  stripePriceId    String?
+  stripeSubId      String?
+  creditsUsed      Int       @default(0)
+  creditsLimit     Int       @default(3)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  projects        Project[]
-  jobs            GenerationJob[]
+  projects Project[]
+  jobs     GenerationJob[]
+  accounts Account[]
+  sessions Session[]
 }
 
-model Project {
-  id              String        @id @default(cuid())
-  userId          String
-  title           String
-  brief           String?
-  academicLevel   String        @default("Master")
-  university      String?
-  field           String?
-  status          ProjectStatus @default(DRAFT)
-  language        String        @default("fr")
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
 
-  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documents       Document[]
-  summaries       Summary[]
-  reports         Report[]
-  jobs            GenerationJob[]
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
 
-model Document {
-  id              String        @id @default(cuid())
-  projectId       String
-  filename        String
-  originalName    String
-  mimeType        String
-  size            Int
-  storageKey      String
-  status          String        @default("uploaded")
-  chunkCount      Int           @default(0)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
 
-  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  @@unique([identifier, token])
+}
+
+model Project {
+  id            String        @id @default(cuid())
+  userId        String
+  title         String
+  brief         String?
+  academicLevel String        @default("Master")
+  university    String?
+  field         String?
+  status        ProjectStatus @default(DRAFT)
+  language      String        @default("fr")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents Document[]
+  summaries Summary[]
+  reports   Report[]
+  jobs      GenerationJob[]
+  intake    ProjectIntake?
+  briefs    ProjectBrief[]
+
+  @@index([userId])
+}
+
+model ProjectIntake {
+  id            String       @id @default(cuid())
+  projectId     String       @unique
+  schemaVersion Int          @default(1)
+  currentStep   Int          @default(1)
+  status        IntakeStatus @default(IN_PROGRESS)
+  answers       Json         @default("{}")
+  riskFlags     Json         @default("[]")
+  approvedAt    DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  briefs  ProjectBrief[]
+}
+
+model ProjectBrief {
+  id        String   @id @default(cuid())
+  projectId String
+  intakeId  String
+  version   Int      @default(1)
+  content   Json
+  status    String   @default("APPROVED")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  intake  ProjectIntake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+  @@index([intakeId])
+}
+
+model Document {
+  id           String   @id @default(cuid())
+  projectId    String
+  filename     String
+  originalName String
+  mimeType     String
+  size         Int
+  storageKey   String
+  status       String   @default("uploaded")
+  chunkCount   Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
 }
 
 model Summary {
-  id              String        @id @default(cuid())
-  projectId       String
-  version         Int           @default(1)
-  content         String        @default("")
-  structure       String        @default("[]")
-  status          ProjectStatus @default(DRAFT)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id        String        @id @default(cuid())
+  projectId String
+  version   Int           @default(1)
+  content   String        @default("")
+  structure String        @default("[]")
+  status    ProjectStatus @default(DRAFT)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 
-  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  reports         Report[]
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reports Report[]
 
   @@index([projectId])
 }
 
 model Report {
-  id              String        @id @default(cuid())
-  projectId       String
-  summaryId       String?
-  title           String
-  content         String        @default("")
-  sections        String        @default("[]")
-  status          ProjectStatus @default(DRAFT)
-  wordCount       Int           @default(0)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id        String        @id @default(cuid())
+  projectId String
+  summaryId String?
+  title     String
+  content   String        @default("")
+  sections  String        @default("[]")
+  status    ProjectStatus @default(DRAFT)
+  wordCount Int           @default(0)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 
-  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  summary         Summary?      @relation(fields: [summaryId], references: [id])
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  summary Summary? @relation(fields: [summaryId], references: [id])
 
   @@index([projectId])
 }
 
 model GenerationJob {
-  id              String        @id @default(cuid())
+  id              String    @id @default(cuid())
   userId          String
   projectId       String
-  type            String        @default("report")
-  status          JobStatus     @default(PENDING)
-  progress        Int           @default(0)
-  progressMessage String        @default("")
+  type            String    @default("report")
+  status          JobStatus @default(PENDING)
+  progress        Int       @default(0)
+  progressMessage String    @default("")
   outputData      String?
   errorMessage    String?
   startedAt       DateTime?
   completedAt     DateTime?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([projectId])
 }
 
 model Embedding {
-  id              String        @id @default(cuid())
-  projectId       String
-  documentId      String?
-  chunkIndex      Int           @default(0)
-  content         String
-  embedding       String        @default("")
-  metadata        String        @default("{}")
-  createdAt       DateTime      @default(now())
+  id         String   @id @default(cuid())
+  projectId  String
+  documentId String?
+  chunkIndex Int      @default(0)
+  content    String
+  embedding  String   @default("")
+  metadata   String   @default("{}")
+  createdAt  DateTime @default(now())
 
   @@index([projectId])
   @@index([documentId])
 }
 
 model ApiUsage {
-  id              String        @id @default(cuid())
-  userId          String
-  projectId       String?
-  type            String
-  inputTokens     Int           @default(0)
-  outputTokens    Int           @default(0)
-  costUsd         Float         @default(0)
-  createdAt       DateTime      @default(now())
+  id           String   @id @default(cuid())
+  userId       String
+  projectId    String?
+  type         String
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  costUsd      Float    @default(0)
+  createdAt    DateTime @default(now())
 
   @@index([userId])
   @@index([createdAt])

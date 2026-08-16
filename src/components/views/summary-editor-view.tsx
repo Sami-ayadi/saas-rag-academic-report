@@ -22,6 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
 import { useAppStore } from '@/lib/store'
+import { secureFetch } from '@/lib/secure-fetch'
 import type { ProjectFull, SummaryItem } from '@/lib/types'
 import { PROJECT_STATUS_LABELS, PROJECT_STATUS_COLORS } from '@/lib/constants'
 
@@ -31,7 +32,7 @@ const containerVariants = {
 }
 const itemVariants = {
   hidden: { opacity: 0, y: 16 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' } },
+  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } },
 }
 
 export function SummaryEditorView() {
@@ -77,7 +78,7 @@ export function SummaryEditorView() {
     if (!summary) return
     setSaving(true)
     try {
-      const res = await fetch(`/api/reports/${summary.id}`, {
+      const res = await secureFetch(`/api/reports/${summary.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),

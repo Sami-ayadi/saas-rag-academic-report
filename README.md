@@ -1,5 +1,7 @@
 # RAG Report — Plateforme SaaS de Génération de Rapports Académiques
 
+> Generation works locally with a preview generator. Set `OPENAI_API_KEY` (and optionally `OPENAI_REPORT_MODEL`) to enable model-backed summary and report generation. Markdown, DOCX, and PDF exports return real downloadable files. Project uploads accept validated PDF, DOCX, TXT, and Markdown files up to 10 MB.
+
 <p align="center">
   <strong>Pipeline RAG intelligent pour la synthèse documentaire et la génération de rapports académiques structurés</strong><br/>
   <em>Importez vos sources, laissez l'IA synthétiser, éditez et exportez.</em>
@@ -69,7 +71,7 @@
 │  └────┬─────┘  └──────────────┘  └───────────────────┘  │
 │       ▼                                                  │
 │  ┌──────────┐                                           │
-│  │ SQLite   │                                           │
+│  │PostgreSQL│                                           │
 │  │ (prod)   │                                           │
 │  └──────────┘                                           │
 └─────────────────────────────────────────────────────────┘
@@ -101,12 +103,12 @@ navigate('report-editor', projectId, reportId)
 | UI | shadcn/ui | latest | Composants accessibles (Radix) |
 | State | Zustand | 5.x | Navigation SPA / state client |
 | ORM | Prisma | 6.x | Accès base de données |
-| Base de données | SQLite | — | Stockage persistant |
+| Base de données | PostgreSQL | 16+ | Stockage persistant et sessions |
 | Validation | Zod | 4.x | Validation schémas (API & formulaires) |
 | Animations | Framer Motion | 12.x | Transitions de vues |
 | Notifications | Sonner | 2.x | Toasts |
 | Forms | React Hook Form | 7.x | Gestion formulaires |
-| Runtime | Bun | — | Runtime JavaScript rapide |
+| Runtime | Node.js | 20+ | Runtime serveur |
 
 ---
 
@@ -117,7 +119,6 @@ my-project/
 ├── prisma/
 │   └── schema.prisma          # Schéma BDD (9 modèles, 3 enums)
 ├── db/
-│   ├── custom.db              # Base SQLite (générée)
 │   └── seed.ts                # Données de démonstration
 ├── public/
 │   ├── logo.svg               # Logo de l'application
@@ -184,7 +185,8 @@ my-project/
 
 ### Prérequis
 
-- **Node.js** >= 18 ou **Bun** >= 1.0
+- **Node.js** >= 20
+- **Docker** (recommandé pour PostgreSQL local)
 - **Git**
 - Un terminal / IDE de votre choix (VS Code recommandé)
 
@@ -196,23 +198,24 @@ git clone https://github.com/<ORG>/saas-rag-report.git
 cd saas-rag-report
 
 # 2. Installer les dépendances
-bun install
-# ou : npm install
+npm install
 
 # 3. Configurer les variables d'environnement
 cp .env.example .env
-# Éditer .env et définir DATABASE_URL
+# Éditer .env et définir DATABASE_URL, NEXTAUTH_SECRET et les identifiants Google OAuth
 
-# 4. Initialiser la base de données
-bun run db:push
-bun run db:generate
+# 4. Démarrer PostgreSQL et appliquer les migrations
+docker compose up -d postgres
+npm run db:generate
+npm run db:deploy
 
-# 5 (optionnel). Charger les données de démonstration
+# 5 (optionnel, développement uniquement). Charger les données de démonstration
+# Définir AUTH_ALLOW_DEMO=true et NEXT_PUBLIC_AUTH_ALLOW_DEMO=true dans .env
 # Via l'interface : cliquer le bouton "Charger les données démo" sur le Dashboard
 # Ou via API : curl -X POST http://localhost:3000/api/seed
 
 # 6. Lancer le serveur de développement
-bun run dev
+npm run dev
 ```
 
 L'application est accessible sur **http://localhost:3000**.
@@ -221,9 +224,16 @@ L'application est accessible sur **http://localhost:3000**.
 
 | Variable | Description | Valeur par défaut |
 |----------|-------------|-------------------|
-| `DATABASE_URL` | URL de connexion SQLite | `file:./db/custom.db` |
+| `DATABASE_URL` | URL PostgreSQL | `postgresql://postgres:postgres@localhost:5432/rag_report?schema=public` |
+| `NEXTAUTH_URL` | URL publique de l'application | `http://localhost:3000` |
+| `NEXTAUTH_SECRET` | Secret de session et de signature CSRF (32 caractères minimum) | — |
+| `GOOGLE_CLIENT_ID` | Identifiant OAuth Google | — |
+| `GOOGLE_CLIENT_SECRET` | Secret OAuth Google | — |
+| `ADMIN_EMAILS` | Adresses Google administratrices, séparées par des virgules | — |
+| `AUTH_ALLOW_DEMO` | Active l'utilisateur démo côté serveur, hors production uniquement | `false` |
+| `NEXT_PUBLIC_AUTH_ALLOW_DEMO` | Active l'interface démo côté client | `false` |
 
-> **Note** : En production, vous remplacerez SQLite par PostgreSQL et ajouterez les variables pour les API d'IA (Claude, Voyage AI) et Stripe.
+Le guide pas à pas se trouve dans [GOOGLE_AUTH_SETUP.md](./GOOGLE_AUTH_SETUP.md). Pour le développement, l'origine est `http://localhost:3000` et l'URI de redirection est `http://localhost:3000/api/auth/callback/google`.
 
 ---
 
@@ -231,7 +241,7 @@ L'application est accessible sur **http://localhost:3000**.
 
 ### Schéma (Prisma)
 
-Le schéma comporte **9 modèles** et **3 énumérations** :
+Le schéma comporte **11 modèles** et **3 énumérations**, y compris les comptes et sessions Auth.js :
 
 ```
 ┌──────────┐     ┌───────────┐     ┌─────────┐
@@ -262,27 +272,28 @@ Le schéma comporte **9 modèles** et **3 énumérations** :
 ### Commandes Prisma utiles
 
 ```bash
-bun run db:push      # Appliquer le schéma à la BDD (destructif)
-bun run db:generate  # Générer le client Prisma
-bun run db:migrate   # Créer une migration
-bun run db:reset     # Réinitialiser la BDD
+npm run db:generate  # Générer le client Prisma
+npm run db:migrate   # Créer une migration locale
+npm run db:deploy    # Appliquer les migrations en production
+npm run db:reset     # Réinitialiser la BDD locale
 ```
 
 ---
 
 ## 🖥️ Vues de l'application
 
-L'application comporte **7 vues principales**, toutes rendues dans le composant `page.tsx` via `AnimatePresence` et le store Zustand.
+L'application comporte **8 vues principales**, toutes rendues dans le composant `page.tsx` via `AnimatePresence` et le store Zustand.
 
 | # | Vue | Fichier | Description |
 |---|-----|---------|-------------|
 | 1 | **Dashboard** | `dashboard-view.tsx` | Vue d'accueil : statistiques, tableau des projets, bouton de seed |
 | 2 | **Nouveau Projet** | `new-project-view.tsx` | Formulaire de création (titre, niveau académique, université, domaine, langue) |
-| 3 | **Détail Projet** | `project-detail-view.tsx` | Pipeline visuel, 4 onglets (Documents, Résumés, Rapports, Jobs) |
-| 4 | **Éditeur de Résumé** | `summary-editor-view.tsx` | Split-view : liste des résumés + éditeur markdown + diff |
-| 5 | **Éditeur de Rapport** | `report-editor-view.tsx` | Split-view : sections (gauche) + inspecteur avec régénération IA et diff (droite) |
-| 6 | **Tarification** | `pricing-view.tsx` | 3 cartes d'abonnement (Free/Starter/Pro) + FAQ |
-| 7 | **Paramètres** | `settings-view.tsx` | Profil utilisateur, abonnement, clés API |
+| 3 | **Questionnaire** | `intake-view.tsx` | Parcours guidé en 5 étapes, adapté au domaine, avec sauvegarde et validation |
+| 4 | **Détail Projet** | `project-detail-view.tsx` | Pipeline visuel, 4 onglets (Documents, Résumés, Rapports, Jobs) |
+| 5 | **Éditeur de Résumé** | `summary-editor-view.tsx` | Split-view : liste des résumés + éditeur markdown + diff |
+| 6 | **Éditeur de Rapport** | `report-editor-view.tsx` | Split-view : sections (gauche) + inspecteur avec régénération IA et diff (droite) |
+| 7 | **Tarification** | `pricing-view.tsx` | 3 cartes d'abonnement (Free/Starter/Pro) + FAQ |
+| 8 | **Paramètres** | `settings-view.tsx` | Profil utilisateur et abonnement |
 
 ### Vue détaillée — Éditeur de Rapport
 
@@ -310,6 +321,9 @@ C'est la vue la plus complexe. Elle utilise `ResizablePanelGroup` pour un layout
 | `PATCH` | `/api/projects/[id]` | Mettre à jour un projet |
 | `GET` | `/api/projects/[id]/documents` | Liste des documents d'un projet |
 | `POST` | `/api/projects/[id]/documents` | Uploader un document |
+| `GET` | `/api/projects/[id]/intake` | Charger le questionnaire et le dernier brief |
+| `PUT` | `/api/projects/[id]/intake` | Sauvegarder des réponses validées |
+| `POST` | `/api/projects/[id]/intake` | Approuver et versionner le brief structuré |
 | `POST` | `/api/projects/[id]/generate-summary` | Lancer la génération de synthèse |
 | `POST` | `/api/projects/[id]/generate-report` | Lancer la génération de rapport |
 
@@ -328,7 +342,8 @@ C'est la vue la plus complexe. Elle utilise `ResizablePanelGroup` pour un layout
 |---------|-------|-------------|
 | `GET` | `/api/user` | Profil utilisateur + stats |
 | `GET` | `/api/pricing` | Taux d'abonnement |
-| `POST` | `/api/seed` | Charger les données de démo |
+| `GET/POST` | `/api/auth/[...nextauth]` | Authentification Google et sessions Auth.js |
+| `POST` | `/api/seed` | Charger les données de démo (développement explicite uniquement) |
 | `GET` | `/api/jobs/[id]` | Statut d'un job de génération |
 
 ---
@@ -384,14 +399,12 @@ projet        + Analyse        IA prête         du rapport     édité         
 
 | Composant | Pourquoi | Comment |
 |-----------|----------|--------|
-| **Authentification** | Sécuriser l'accès utilisateur | Intégrer NextAuth.js (déjà en dépendance) avec un provider OAuth (Google, GitHub) |
-| **PostgreSQL** | SQLite ne scale pas en production | Changer `provider` dans `schema.prisma`, mettre à jour `DATABASE_URL` |
 | **Claude API réelle** | Remplacer la simulation de génération | Appeler l'API Anthropic dans les routes `generate-summary` et `generate-report` |
 | **Voyage AI embeddings** | Embeddings réels pour le RAG | Intégrer le SDK Voyage AI pour le chunking et l'embedding |
 | **Stripe** | Paiement des abonnements | Utiliser `stripeCustomerId`, `stripePriceId`, `stripeSubId` du modèle User |
 | **Upload de fichiers réels** | Stockage persistant | Ajouter S3/R2/Uploadthing pour le stockage des documents |
 | **WebSocket / SSE** | Progression temps réel des jobs | Remplacer le polling par Server-Sent Events ou Socket.io |
-| **Tests** | Fiabilité du code | Ajouter Vitest + Testing Library (cf. section Tests) |
+| **Tests étendus** | Fiabilité du code | Ajouter Testing Library et des tests end-to-end aux tests Vitest existants |
 | **Rate limiting** | Protéger les API | Middleware Next.js ou upstash/ratelimit |
 | **i18n** | L'app est en français | `next-intl` est déjà en dépendance, configurer les locales |
 | **Export réel PDF/DOCX** | Génération de fichiers | Utiliser `@react-pdf/renderer` ou `puppeteer` pour PDF, `docx` pour Word |
@@ -406,11 +419,19 @@ projet        + Analyse        IA prête         du rapport     édité         
 
 ### Bonnes pratiques pour l'équipe Backend / API
 
+- **Utiliser `secureFetch`** pour toute mutation depuis le navigateur afin d'envoyer le jeton CSRF signé.
+- **Utiliser `readJsonBody`** avec un schéma Zod strict et une limite adaptée pour toute route acceptant du JSON.
+- **Protéger chaque ressource privée** avec `getAuthenticatedUser` et un filtre `userId` côté base de données.
+- **Ne jamais retourner** les identifiants Stripe, jetons OAuth, secrets ou clés API dans les réponses utilisateur.
 - **Toujours retourner des objets structurés** : `{ report: {...} }`, `{ projects: [...] }`, `{ error: "..." }`.
 - **Codes HTTP corrects** : `200` (succès), `201` (créé), `400` (bad request), `404` (non trouvé), `500` (erreur serveur).
 - **Envelopper les routes dans un try/catch** et logger les erreurs avec `console.error()`.
 - **Utiliser `runtime = 'nodejs'`** pour les routes qui accèdent à la BDD (Prisma ne fonctionne pas en Edge Runtime).
 - **Ne pas exposer de données sensibles** dans les réponses API (mots de passe, clés API complètes, etc.).
+
+La couche `src/proxy.ts` applique à toutes les routes API les limites de requêtes, contrôles d'origine, limites globales de corps, validation CSRF pour les mutations et en-têtes `no-store`. Les en-têtes CSP, anti-framing, MIME sniffing, permissions et referrer policy sont configurés dans `next.config.ts`.
+
+> Le rate limiting en mémoire protège une instance unique. Avant un déploiement horizontal ou serverless, le remplacer par un compteur distribué Redis/Upstash sans supprimer les contrôles locaux.
 
 ---
 
@@ -422,7 +443,7 @@ Cette section décrit comment **tester chaque use case** de l'application pour v
 
 ```bash
 # Lancer le serveur de développement
-bun run dev
+npm run dev
 
 # Dans un autre terminal, charger les données de démo
 curl -X POST http://localhost:3000/api/seed
@@ -558,10 +579,10 @@ curl -X POST http://localhost:3000/api/reports/<REPORT_ID>/regenerate-section \
 
 ```bash
 # Build
-bun run build
+npm run build
 
 # Lancer en production
-bun run start
+npm run start
 # Le serveur écoute sur le port 3000
 ```
 
@@ -571,18 +592,18 @@ bun run start
 |------------|--------|
 | **Vercel** | `git push` → déploiement automatique (recommandé pour Next.js) |
 | **Docker** | Utiliser le `Dockerfile` (à créer) avec `node:20-alpine` |
-| **VPS** | Build + `bun run start` derrière un reverse proxy (Caddy/Nginx) |
+| **VPS** | Build + `npm run start` derrière un reverse proxy (Caddy/Nginx) |
 
 ### Configuration production
 
 Avant de déployer en production :
 
-1. Remplacer **SQLite** par **PostgreSQL** (`provider = "postgresql"` dans `schema.prisma`)
-2. Ajouter les variables d'environnement pour les API d'IA (Claude, Voyage AI)
-3. Configurer **Stripe** pour les paiements
-4. Configurer un **stockage S3/R2** pour les uploads
-5. Activer **NextAuth** avec un provider OAuth
-6. Mettre en place le **rate limiting** et la gestion CORS
+1. Configurer une instance PostgreSQL gérée et exécuter `npm run db:deploy`
+2. Configurer Google OAuth avec l'URL HTTPS de production
+3. Ajouter les variables d'environnement pour les API d'IA
+4. Configurer **Stripe** pour les paiements
+5. Configurer un **stockage S3/R2** pour les uploads
+6. Mettre en place le **rate limiting**, l'observabilité et les sauvegardes
 
 ---
 

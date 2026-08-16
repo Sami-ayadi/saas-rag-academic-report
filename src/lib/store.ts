@@ -4,10 +4,12 @@ export type AppView =
   | 'dashboard'
   | 'new-project'
   | 'project-detail'
+  | 'intake'
   | 'summary-editor'
   | 'report-editor'
   | 'pricing'
   | 'settings'
+  | 'admin'
 
 interface AppState {
   currentView: AppView

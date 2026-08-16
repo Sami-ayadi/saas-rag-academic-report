@@ -37,6 +37,7 @@ import {
 } from '@/components/ui/resizable'
 
 import { useAppStore } from '@/lib/store'
+import { secureFetch } from '@/lib/secure-fetch'
 import type { ReportItem, ReportSection, GenerationJobItem } from '@/lib/types'
 import { PROJECT_STATUS_LABELS, PROJECT_STATUS_COLORS } from '@/lib/constants'
 
@@ -46,7 +47,7 @@ const containerVariants = {
 }
 const itemVariants = {
   hidden: { opacity: 0, y: 12 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: 'easeOut' } },
+  show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: 'easeOut' as const } },
 }
 
 function SectionCard({
@@ -171,7 +172,7 @@ export function ReportEditorView() {
     setRegenerating(true)
     setDiffContent(null)
     try {
-      const res = await fetch(`/api/reports/${selectedReportId}/regenerate-section`, {
+      const res = await secureFetch(`/api/reports/${selectedReportId}/regenerate-section`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sectionId: targetId, instructions: instructions || undefined }),
@@ -208,7 +209,7 @@ export function ReportEditorView() {
     if (!diffContent || !activeSectionId || !selectedReportId) return
     // Save accepted changes to DB
     try {
-      const res = await fetch(`/api/reports/${selectedReportId}`, {
+      const res = await secureFetch(`/api/reports/${selectedReportId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sectionId: activeSectionId, sectionContent: diffContent.newContent }),
@@ -234,16 +235,27 @@ export function ReportEditorView() {
     setDiffContent(null)
   }
 
-  async function handleExport(format: 'docx' | 'pdf') {
+  async function handleExport(format: 'docx' | 'pdf' | 'md') {
     if (!selectedReportId) return
     setExporting(format)
     try {
-      const res = await fetch(`/api/reports/${selectedReportId}/export`, {
+      const res = await secureFetch(`/api/reports/${selectedReportId}/export`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ format }),
       })
       if (res.ok) {
+        const blob = await res.blob()
+        const disposition = res.headers.get('Content-Disposition') ?? ''
+        const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `rapport.${format}`
+        const downloadUrl = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = downloadUrl
+        link.download = filename
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        URL.revokeObjectURL(downloadUrl)
         toast.success(`Export ${format.toUpperCase()} prêt (démonstration)`)
       } else {
         toast.error('Erreur lors de l\'export')
@@ -302,6 +314,15 @@ export function ReportEditorView() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handleExport('md')}
+            disabled={exporting === 'md'}
+          >
+            {exporting === 'md' ? <Loader2 className="mr-2 size-3 animate-spin" /> : <FileDown className="mr-2 size-3" />}
+            MD
+          </Button>
           <Button
             size="sm"
             variant="outline"

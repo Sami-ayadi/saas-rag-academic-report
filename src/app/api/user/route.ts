@@ -1,15 +1,32 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 
 // GET /api/user - Get current user info with usage stats
 export async function GET() {
   try {
-    // In a real app, we'd get the user from the session
-    // For demo, use the demo user
+    const authenticatedUser = await getAuthenticatedUser();
+    if (!authenticatedUser) {
+      return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
+    }
+
     const user = await db.user.findUnique({
-      where: { email: 'demo@rapportgen.fr' },
+      where: { id: authenticatedUser.id },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        image: true,
+        tier: true,
+        role: true,
+        isActive: true,
+        creditsUsed: true,
+        creditsLimit: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
 
     if (!user) {
@@ -63,7 +80,7 @@ export async function GET() {
     };
 
     return NextResponse.json({
-      user,
+      user: { ...user, email: user.email ?? '' },
       usageStats,
     });
   } catch (error) {

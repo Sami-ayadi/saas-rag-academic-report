@@ -1,137 +1,187 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { z } from 'zod/v4';
-import { v4 as uuidv4 } from 'uuid';
+import { mkdir, unlink, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 
-export const runtime = 'nodejs';
+import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod/v4'
 
-const uploadDocumentSchema = z.object({
-  filename: z.string().min(1),
-  originalName: z.string().min(1),
-  mimeType: z.string().min(1),
-  size: z.number().positive(),
-  content: z.string().min(1),
-});
+import { db } from '@/lib/db'
+import { getAuthenticatedUser } from '@/lib/auth'
+import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input'
 
-// GET /api/projects/[id]/documents - List documents for a project
+export const runtime = 'nodejs'
+
+const MAX_FILE_BYTES = 10_000_000
+const ALLOWED_FILES = {
+  '.pdf': ['application/pdf'],
+  '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  '.txt': ['text/plain'],
+  '.md': ['text/markdown', 'text/plain'],
+} as const
+
+const deleteDocumentSchema = z.object({
+  documentId: z.string().trim().min(1).max(100),
+}).strict()
+
+function storageRoot() {
+  return path.resolve(process.cwd(), 'storage', 'uploads')
+}
+
+function safeStoragePath(...segments: string[]) {
+  const root = storageRoot()
+  const resolved = path.resolve(root, ...segments)
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+    throw new Error('Invalid storage path')
+  }
+  return resolved
+}
+
+function hasValidSignature(extension: keyof typeof ALLOWED_FILES, bytes: Buffer) {
+  if (extension === '.pdf') return bytes.subarray(0, 5).toString('ascii') === '%PDF-'
+  if (extension === '.docx') return bytes[0] === 0x50 && bytes[1] === 0x4b
+  return !bytes.includes(0)
+}
+
+function extractText(extension: keyof typeof ALLOWED_FILES, bytes: Buffer) {
+  if (extension !== '.txt' && extension !== '.md') return ''
+  return new TextDecoder('utf-8', { fatal: false }).decode(bytes).replace(/\0/g, '').slice(0, 250_000)
+}
+
 export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
+    const { id } = await params
+    const user = await getAuthenticatedUser()
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
 
-    const project = await db.project.findUnique({ where: { id } });
-
-    if (!project) {
-      return NextResponse.json(
-        { error: 'Projet non trouvé' },
-        { status: 404 }
-      );
-    }
+    const project = await db.project.findFirst({ where: { id, userId: user.id }, select: { id: true } })
+    if (!project) return NextResponse.json({ error: 'Projet non trouvé' }, { status: 404 })
 
     const documents = await db.document.findMany({
       where: { projectId: id },
       orderBy: { createdAt: 'desc' },
-    });
-
-    return NextResponse.json({ documents });
+    })
+    return NextResponse.json({ documents })
   } catch (error) {
-    console.error('GET /api/projects/[id]/documents error:', error);
-    return NextResponse.json(
-      { error: 'Erreur lors de la récupération des documents' },
-      { status: 500 }
-    );
+    console.error('GET /api/projects/[id]/documents error:', error)
+    return NextResponse.json({ error: 'Erreur lors de la récupération des documents' }, { status: 500 })
   }
 }
 
-// POST /api/projects/[id]/documents - Upload document
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
+) {
+  let storedAbsolutePath: string | undefined
+  try {
+    const { id } = await params
+    const user = await getAuthenticatedUser()
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
+
+    const project = await db.project.findFirst({ where: { id, userId: user.id }, select: { id: true } })
+    if (!project) return NextResponse.json({ error: 'Projet non trouvé' }, { status: 404 })
+
+    const contentType = request.headers.get('content-type') ?? ''
+    if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
+      return NextResponse.json({ error: 'Envoyez le fichier avec multipart/form-data' }, { status: 415 })
+    }
+
+    const form = await request.formData()
+    const file = form.get('file')
+    if (!(file instanceof File)) return NextResponse.json({ error: 'Fichier manquant' }, { status: 400 })
+    if (!file.name || file.name.length > 180 || /[\\/\0]/.test(file.name)) {
+      return NextResponse.json({ error: 'Nom de fichier invalide' }, { status: 400 })
+    }
+    if (file.size <= 0 || file.size > MAX_FILE_BYTES) {
+      return NextResponse.json({ error: 'Le fichier doit faire moins de 10 Mo' }, { status: 413 })
+    }
+
+    const extension = path.extname(file.name).toLowerCase() as keyof typeof ALLOWED_FILES
+    const allowedMimes = ALLOWED_FILES[extension]
+    if (!allowedMimes || !(allowedMimes as readonly string[]).includes(file.type)) {
+      return NextResponse.json({ error: 'Formats acceptés : PDF, DOCX, TXT et Markdown' }, { status: 415 })
+    }
+
+    const bytes = Buffer.from(await file.arrayBuffer())
+    if (!hasValidSignature(extension, bytes)) {
+      return NextResponse.json({ error: 'Le contenu du fichier ne correspond pas à son format' }, { status: 400 })
+    }
+
+    const storedName = `${crypto.randomUUID()}${extension}`
+    const relativeStorageKey = ['storage', 'uploads', user.id, id, storedName].join('/')
+    const targetDirectory = safeStoragePath(user.id, id)
+    storedAbsolutePath = safeStoragePath(user.id, id, storedName)
+    await mkdir(targetDirectory, { recursive: true })
+    await writeFile(storedAbsolutePath, bytes, { flag: 'wx' })
+
+    const text = extractText(extension, bytes)
+    const chunks = text.match(/[\s\S]{1,1500}/g)?.slice(0, 100) ?? []
+    const documentId = crypto.randomUUID()
+    const document = await db.$transaction(async (transaction) => {
+      const created = await transaction.document.create({
+        data: {
+          id: documentId,
+          projectId: id,
+          filename: storedName,
+          originalName: file.name,
+          mimeType: file.type,
+          size: file.size,
+          storageKey: relativeStorageKey,
+          status: chunks.length ? 'processed' : 'stored',
+          chunkCount: chunks.length,
+        },
+      })
+      if (chunks.length) {
+        await transaction.embedding.createMany({
+          data: chunks.map((content, chunkIndex) => ({
+            id: crypto.randomUUID(),
+            projectId: id,
+            documentId,
+            chunkIndex,
+            content,
+            embedding: '[]',
+            metadata: JSON.stringify({ documentId, chunkIndex, source: file.name }),
+          })),
+        })
+      }
+      return created
+    })
+
+    return NextResponse.json({ document }, { status: 201 })
+  } catch (error) {
+    if (storedAbsolutePath) await unlink(storedAbsolutePath).catch(() => undefined)
+    console.error('POST /api/projects/[id]/documents error:', error)
+    return NextResponse.json({ error: 'Erreur lors de l’enregistrement du document' }, { status: 500 })
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { id } = await params;
+    const { id } = await params
+    const user = await getAuthenticatedUser()
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
+    const { documentId } = await readJsonBody(request, deleteDocumentSchema)
 
-    const project = await db.project.findUnique({ where: { id } });
+    const document = await db.document.findFirst({
+      where: { id: documentId, projectId: id, project: { userId: user.id } },
+    })
+    if (!document) return NextResponse.json({ error: 'Document non trouvé' }, { status: 404 })
 
-    if (!project) {
-      return NextResponse.json(
-        { error: 'Projet non trouvé' },
-        { status: 404 }
-      );
-    }
-
-    const body = await request.json();
-    const validated = uploadDocumentSchema.parse(body);
-
-    // Generate a storage key
-    const storageKey = `documents/${id}/${validated.filename}`;
-    const docId = uuidv4();
-
-    // Simulate processing - estimate chunks based on content length
-    const estimatedChunks = Math.ceil(validated.content.length / 1000);
-
-    const document = await db.document.create({
-      data: {
-        id: docId,
-        projectId: id,
-        filename: validated.filename,
-        originalName: validated.originalName,
-        mimeType: validated.mimeType,
-        size: validated.size,
-        storageKey,
-        status: 'uploaded',
-        chunkCount: 0,
-      },
-    });
-
-    // Simulate async document processing (chunking & embedding)
-    // In a real app, this would be done via a queue/background job
-    setTimeout(async () => {
-      try {
-        await db.document.update({
-          where: { id: docId },
-          data: {
-            status: 'processed',
-            chunkCount: estimatedChunks,
-          },
-        });
-
-        // Create embedding records for chunks
-        const chunks = [];
-        for (let i = 0; i < Math.min(estimatedChunks, 5); i++) {
-          chunks.push({
-            id: uuidv4(),
-            projectId: id,
-            documentId: docId,
-            chunkIndex: i,
-            content: validated.content.slice(i * 1000, (i + 1) * 1000),
-            embedding: JSON.stringify(new Array(1536).fill(0).map(() => Math.random())),
-            metadata: JSON.stringify({ chunkIndex: i, documentId: docId }),
-          });
-        }
-
-        if (chunks.length > 0) {
-          await db.embedding.createMany({ data: chunks });
-        }
-      } catch (e) {
-        console.error('Document processing error:', e);
-      }
-    }, 2000);
-
-    return NextResponse.json({ document }, { status: 201 });
+    await db.$transaction([
+      db.embedding.deleteMany({ where: { documentId: document.id, projectId: id } }),
+      db.document.delete({ where: { id: document.id } }),
+    ])
+    const absolutePath = safeStoragePath(user.id, id, document.filename)
+    await unlink(absolutePath).catch(() => undefined)
+    return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('POST /api/projects/[id]/documents error:', error);
-    if (error instanceof z.ZodError) {
-      return NextResponse.json(
-        { error: 'Données invalides', details: error.issues },
-        { status: 400 }
-      );
-    }
-    return NextResponse.json(
-      { error: 'Erreur lors de l\'ajout du document' },
-      { status: 500 }
-    );
+    console.error('DELETE /api/projects/[id]/documents error:', error)
+    const requestError = apiRequestErrorResponse(error)
+    if (requestError) return requestError
+    return NextResponse.json({ error: 'Erreur lors de la suppression du document' }, { status: 500 })
   }
 }

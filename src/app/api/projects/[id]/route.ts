@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { z } from 'zod/v4';
+import { getAuthenticatedUser } from '@/lib/auth';
+import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input';
 
 export const runtime = 'nodejs';
 
@@ -8,10 +10,9 @@ const updateProjectSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   brief: z.string().max(2000).optional(),
   academicLevel: z.string().optional(),
-  university: z.string().optional(),
-  field: z.string().optional(),
-  status: z.enum(['DRAFT', 'SUMMARIZING', 'SUMMARY_READY', 'GENERATING', 'REPORT_READY', 'EXPORTED']).optional(),
-});
+  university: z.string().trim().max(200).optional(),
+  field: z.string().trim().max(100).optional(),
+}).strict();
 
 // GET /api/projects/[id] - Get single project with all relations
 export async function GET(
@@ -20,9 +21,11 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    const user = await getAuthenticatedUser();
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
 
-    const project = await db.project.findUnique({
-      where: { id },
+    const project = await db.project.findFirst({
+      where: { id, userId: user.id },
       include: {
         documents: {
           orderBy: { createdAt: 'desc' },
@@ -63,10 +66,11 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const body = await request.json();
-    const validated = updateProjectSchema.parse(body);
+    const user = await getAuthenticatedUser();
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
+    const validated = await readJsonBody(request, updateProjectSchema);
 
-    const project = await db.project.findUnique({ where: { id } });
+    const project = await db.project.findFirst({ where: { id, userId: user.id } });
 
     if (!project) {
       return NextResponse.json(
@@ -83,6 +87,8 @@ export async function PATCH(
     return NextResponse.json({ project: updated });
   } catch (error) {
     console.error('PATCH /api/projects/[id] error:', error);
+    const requestError = apiRequestErrorResponse(error);
+    if (requestError) return requestError;
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         { error: 'Données invalides', details: error.issues },
@@ -103,8 +109,10 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
+    const user = await getAuthenticatedUser();
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
 
-    const project = await db.project.findUnique({ where: { id } });
+    const project = await db.project.findFirst({ where: { id, userId: user.id } });
 
     if (!project) {
       return NextResponse.json(
@@ -113,14 +121,15 @@ export async function DELETE(
       );
     }
 
-    // Delete related records (cascade should handle this, but let's be explicit)
-    await db.apiUsage.deleteMany({ where: { projectId: id } });
-    await db.embedding.deleteMany({ where: { projectId: id } });
-    await db.generationJob.deleteMany({ where: { projectId: id } });
-    await db.report.deleteMany({ where: { projectId: id } });
-    await db.summary.deleteMany({ where: { projectId: id } });
-    await db.document.deleteMany({ where: { projectId: id } });
-    await db.project.delete({ where: { id } });
+    await db.$transaction([
+      db.apiUsage.deleteMany({ where: { projectId: id, userId: user.id } }),
+      db.embedding.deleteMany({ where: { projectId: id } }),
+      db.generationJob.deleteMany({ where: { projectId: id, userId: user.id } }),
+      db.report.deleteMany({ where: { projectId: id } }),
+      db.summary.deleteMany({ where: { projectId: id } }),
+      db.document.deleteMany({ where: { projectId: id } }),
+      db.project.delete({ where: { id } }),
+    ]);
 
     return NextResponse.json({
       message: 'Projet supprimé avec succès',

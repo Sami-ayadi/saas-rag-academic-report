@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/form'
 
 import { useAppStore } from '@/lib/store'
+import { secureFetch } from '@/lib/secure-fetch'
 import { ACADEMIC_LEVELS, LANGUAGES } from '@/lib/constants'
 
 const FIELDS = [
@@ -69,7 +70,7 @@ const containerVariants = {
 
 const itemVariants = {
   hidden: { opacity: 0, y: 16 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' } },
+  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } },
 }
 
 export function NewProjectView() {
@@ -90,7 +91,7 @@ export function NewProjectView() {
   async function onSubmit(values: NewProjectFormValues) {
     setSubmitting(true)
     try {
-      const res = await fetch('/api/projects', {
+      const res = await secureFetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values),
@@ -104,7 +105,7 @@ export function NewProjectView() {
 
       const data = await res.json()
       toast.success('Projet créé avec succès')
-      navigate('project-detail', data.project.id)
+      navigate('intake', data.project.id)
     } catch {
       toast.error('Erreur réseau')
     } finally {

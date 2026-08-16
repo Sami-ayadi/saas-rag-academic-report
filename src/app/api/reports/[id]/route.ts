@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
+import { z } from 'zod/v4';
+import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input';
 
 export const runtime = 'nodejs';
+
+const updateReportSchema = z.object({
+  content: z.string().max(500_000).optional(),
+  sectionId: z.string().trim().min(1).max(100).optional(),
+  sectionContent: z.string().max(100_000).optional(),
+}).strict().refine(
+  (value) => value.content !== undefined || (value.sectionId !== undefined && value.sectionContent !== undefined),
+  { message: 'Spécifiez content ou sectionId avec sectionContent' },
+);
 
 // GET /api/reports/[id] - Get single report with full content
 export async function GET(
@@ -10,9 +22,11 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    const user = await getAuthenticatedUser();
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
 
-    const report = await db.report.findUnique({
-      where: { id },
+    const report = await db.report.findFirst({
+      where: { id, project: { userId: user.id } },
       include: {
         summary: true,
         project: {
@@ -52,8 +66,12 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
+    const user = await getAuthenticatedUser();
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
 
-    const report = await db.report.findUnique({ where: { id } });
+    const report = await db.report.findFirst({
+      where: { id, project: { userId: user.id } },
+    });
 
     if (!report) {
       return NextResponse.json(
@@ -62,12 +80,7 @@ export async function PATCH(
       );
     }
 
-    const body = await request.json();
-    const { content, sectionId, sectionContent } = body as {
-      content?: string;
-      sectionId?: string;
-      sectionContent?: string;
-    };
+    const { content, sectionId, sectionContent } = await readJsonBody(request, updateReportSchema, 550_000);
 
     // If updating a specific section
     if (sectionId && sectionContent) {
@@ -135,6 +148,11 @@ export async function PATCH(
     );
   } catch (error) {
     console.error('PATCH /api/reports/[id] error:', error);
+    const requestError = apiRequestErrorResponse(error);
+    if (requestError) return requestError;
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: 'Données invalides', details: error.issues }, { status: 400 });
+    }
     return NextResponse.json(
       { error: 'Erreur lors de la mise à jour du rapport' },
       { status: 500 }

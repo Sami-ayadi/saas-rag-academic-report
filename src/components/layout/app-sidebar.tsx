@@ -1,6 +1,7 @@
 'use client'
 
-import { GraduationCap, LayoutDashboard, FilePlus, FolderOpen, CreditCard, Settings } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { GraduationCap, LayoutDashboard, FilePlus, FolderOpen, CreditCard, Settings, ShieldCheck } from 'lucide-react'
 import { useAppStore } from '@/lib/store'
 import { useSidebar } from '@/components/ui/sidebar'
 import {
@@ -20,7 +21,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { TIER_LABELS, TIER_COLORS } from '@/lib/constants'
-import type { Tier } from '@/lib/types'
+import { useSession } from 'next-auth/react'
+import type { AppView } from '@/lib/store'
 
 const navItems = [
   {
@@ -54,10 +56,27 @@ const settingsItems = [
 ]
 
 export function AppSidebar() {
-  const { currentView, navigate, sidebarOpen } = useAppStore()
-  const { state, isMobile, setOpenMobile } = useSidebar()
+  const { currentView, navigate } = useAppStore()
+  const { data: session } = useSession()
+  const { isMobile, setOpenMobile } = useSidebar()
+  const [apiUser, setApiUser] = useState<{
+    name?: string | null
+    email?: string | null
+    image?: string | null
+    tier: 'FREE' | 'STARTER' | 'PRO'
+    role: 'USER' | 'ADMIN'
+  } | null>(null)
 
-  const handleNavigate = (view: typeof navItems[number]['view']) => {
+  useEffect(() => {
+    fetch('/api/user')
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => setApiUser(data?.user ?? null))
+      .catch(() => undefined)
+  }, [])
+
+  const currentUser = apiUser ?? session?.user
+
+  const handleNavigate = (view: AppView) => {
     navigate(view)
     if (isMobile) {
       setOpenMobile(false)
@@ -67,7 +86,7 @@ export function AppSidebar() {
   return (
     <Sidebar collapsible="icon" variant="sidebar">
       <SidebarHeader className="px-4 py-3">
-        <div className="flex items-center gap-3 group-data-[collapsible=icon]:justify-center">
+        <a href="/" className="flex items-center gap-3 group-data-[collapsible=icon]:justify-center">
           <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <GraduationCap className="size-4" />
           </div>
@@ -79,12 +98,28 @@ export function AppSidebar() {
               Génération Académique
             </span>
           </div>
-        </div>
+        </a>
       </SidebarHeader>
 
       <Separator className="mx-3 w-auto" />
 
       <SidebarContent>
+        {currentUser?.role === 'ADMIN' && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Administration</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton isActive={currentView === 'admin'} tooltip="Administration" onClick={() => handleNavigate('admin')}>
+                    <ShieldCheck className="size-4" />
+                    <span>Utilisateurs & activité</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
         <SidebarGroup>
           <SidebarGroupLabel>Principal</SidebarGroupLabel>
           <SidebarGroupContent>
@@ -130,20 +165,20 @@ export function AppSidebar() {
         <Separator className="mx-3 w-auto" />
         <div className="flex items-center gap-3 px-2 py-2 group-data-[collapsible=icon]:justify-center">
           <Avatar className="size-8 shrink-0">
-            <AvatarImage src="" alt="Utilisateur" />
+            <AvatarImage src={currentUser?.image ?? ''} alt={currentUser?.name ?? 'Utilisateur'} />
             <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
-              JD
+              {(currentUser?.name ?? 'Utilisateur').split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
           <div className="flex flex-1 flex-col group-data-[collapsible=icon]:hidden">
             <span className="text-xs font-medium text-sidebar-foreground truncate">
-              Jean Dupont
+              {currentUser?.name ?? 'Utilisateur'}
             </span>
             <Badge
               variant="secondary"
-              className={`h-5 px-1.5 text-[10px] font-medium ${TIER_COLORS.PRO}`}
+              className={`h-5 px-1.5 text-[10px] font-medium ${TIER_COLORS[currentUser?.tier ?? 'FREE']}`}
             >
-              {TIER_LABELS.PRO}
+              {TIER_LABELS[currentUser?.tier ?? 'FREE']}
             </Badge>
           </div>
         </div>

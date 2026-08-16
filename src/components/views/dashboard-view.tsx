@@ -30,6 +30,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { useAppStore } from '@/lib/store'
+import { secureFetch } from '@/lib/secure-fetch'
 import type { ProjectWithDetails, UserWithStats, UsageStats } from '@/lib/types'
 import { PROJECT_STATUS_LABELS, PROJECT_STATUS_COLORS } from '@/lib/constants'
 import { formatDistanceToNow } from 'date-fns'
@@ -45,7 +46,7 @@ const containerVariants = {
 
 const itemVariants = {
   hidden: { opacity: 0, y: 16 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' } },
+  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } },
 }
 
 function formatDate(date: string | Date): string {
@@ -57,6 +58,7 @@ function formatDate(date: string | Date): string {
 }
 
 export function DashboardView() {
+  const demoMode = process.env.NEXT_PUBLIC_AUTH_ALLOW_DEMO === 'true'
   const navigate = useAppStore((s) => s.navigate)
   const [projects, setProjects] = useState<ProjectWithDetails[]>([])
   const [user, setUser] = useState<UserWithStats | null>(null)
@@ -94,7 +96,7 @@ export function DashboardView() {
   async function handleSeed() {
     setSeeding(true)
     try {
-      const res = await fetch('/api/seed', { method: 'POST' })
+      const res = await secureFetch('/api/seed', { method: 'POST' })
       if (res.ok) {
         toast.success('Données de démonstration ajoutées avec succès')
         await loadData()
@@ -154,20 +156,22 @@ export function DashboardView() {
             Vue d'ensemble de vos projets et activités
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleSeed}
-          disabled={seeding}
-          className="w-fit"
-        >
-          {seeding ? (
-            <Loader2 className="mr-2 size-4 animate-spin" />
-          ) : (
-            <Database className="mr-2 size-4" />
-          )}
-          Seeder les données
-        </Button>
+        {demoMode && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSeed}
+            disabled={seeding}
+            className="w-fit"
+          >
+            {seeding ? (
+              <Loader2 className="mr-2 size-4 animate-spin" />
+            ) : (
+              <Database className="mr-2 size-4" />
+            )}
+            Seeder les données
+          </Button>
+        )}
       </motion.div>
 
       {/* Stats Cards */}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 
@@ -10,9 +11,13 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    const user = await getAuthenticatedUser();
+    if (!user) {
+      return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
+    }
 
-    const job = await db.generationJob.findUnique({
-      where: { id },
+    const job = await db.generationJob.findFirst({
+      where: { id, userId: user.id },
       include: {
         project: {
           select: {
@@ -32,7 +37,7 @@ export async function GET(
     }
 
     // Parse output data if present
-    let parsedOutputData = null;
+    let parsedOutputData: unknown = null;
     if (job.outputData) {
       try {
         parsedOutputData = JSON.parse(job.outputData);

@@ -130,6 +130,7 @@ export interface UserWithStats {
   name: string | null;
   image: string | null;
   tier: string;
+  role: 'USER' | 'ADMIN';
   creditsUsed: number;
   creditsLimit: number;
   createdAt: Date;
@@ -193,7 +194,7 @@ export interface RegenerateSectionBody {
 }
 
 export interface ExportReportBody {
-  format: 'docx' | 'pdf';
+  format: 'docx' | 'pdf' | 'md';
 }
 
 export interface UpdateReportBody {

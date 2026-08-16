@@ -20,6 +20,7 @@ import {
   Sparkles,
   FileUp,
   Layers,
+  ClipboardList,
 } from 'lucide-react'
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -41,6 +42,7 @@ import {
 } from '@/components/ui/dialog'
 
 import { useAppStore } from '@/lib/store'
+import { secureFetch } from '@/lib/secure-fetch'
 import type { ProjectFull, DocumentItem, SummaryItem, ReportItem, GenerationJobItem } from '@/lib/types'
 import {
   PROJECT_STATUS_LABELS,
@@ -57,7 +59,7 @@ const containerVariants = {
 }
 const itemVariants = {
   hidden: { opacity: 0, y: 16 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' } },
+  show: { opacity: 1, y: 0, transition: { duration: 0.4, ease: 'easeOut' as const } },
 }
 
 function formatDate(date: string | Date): string {
@@ -86,7 +88,7 @@ export function ProjectDetailView() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [jobProgress, setJobProgress] = useState<{ progress: number; message: string; status: string } | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
-  const [uploadFilename, setUploadFilename] = useState('')
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
 
   const loadProject = useCallback(async () => {
@@ -135,7 +137,7 @@ export function ProjectDetailView() {
     if (!selectedProjectId) return
     setGeneratingSummary(true)
     try {
-      const res = await fetch(`/api/projects/${selectedProjectId}/generate-summary`, { method: 'POST' })
+      const res = await secureFetch(`/api/projects/${selectedProjectId}/generate-summary`, { method: 'POST' })
       if (res.ok) {
         const data = await res.json()
         setActiveJobId(data.jobId)
@@ -154,7 +156,7 @@ export function ProjectDetailView() {
     if (!selectedProjectId) return
     setGeneratingReport(true)
     try {
-      const res = await fetch(`/api/projects/${selectedProjectId}/generate-report`, { method: 'POST' })
+      const res = await secureFetch(`/api/projects/${selectedProjectId}/generate-report`, { method: 'POST' })
       if (res.ok) {
         const data = await res.json()
         setActiveJobId(data.jobId)
@@ -170,27 +172,23 @@ export function ProjectDetailView() {
   }
 
   async function handleUploadDocument() {
-    if (!selectedProjectId || !uploadFilename) return
+    if (!selectedProjectId || !uploadFile) return
     setUploading(true)
     try {
-      const res = await fetch(`/api/projects/${selectedProjectId}/documents`, {
+      const formData = new FormData()
+      formData.set('file', uploadFile)
+      const res = await secureFetch(`/api/projects/${selectedProjectId}/documents`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: uploadFilename.replace(/\s+/g, '_').toLowerCase(),
-          originalName: uploadFilename,
-          mimeType: 'application/pdf',
-          size: Math.floor(Math.random() * 5000000) + 500000,
-          content: 'Contenu de démonstration du document',
-        }),
+        body: formData,
       })
       if (res.ok) {
         toast.success('Document ajouté')
         setUploadOpen(false)
-        setUploadFilename('')
+        setUploadFile(null)
         loadProject()
       } else {
-        toast.error('Erreur lors de l\'ajout')
+        const data = await res.json().catch(() => null)
+        toast.error(data?.error ?? 'Erreur lors de l\'ajout')
       }
     } catch {
       toast.error('Erreur réseau')
@@ -202,10 +200,14 @@ export function ProjectDetailView() {
   async function handleDeleteDocument(docId: string) {
     if (!selectedProjectId) return
     try {
-      const res = await fetch(`/api/projects/${selectedProjectId}`, { method: 'DELETE' })
+      const res = await secureFetch(`/api/projects/${selectedProjectId}/documents`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentId: docId }),
+      })
       if (res.ok) {
-        toast.success('Projet supprimé')
-        navigate('dashboard')
+        toast.success('Document supprimé')
+        loadProject()
       }
     } catch {
       toast.error('Erreur')
@@ -246,8 +248,8 @@ export function ProjectDetailView() {
     )
   }
 
-  const latestSummary = project.summaries?.[project.summaries.length - 1]
-  const latestReport = project.reports?.[project.reports.length - 1]
+  const latestSummary = project.summaries?.[0]
+  const latestReport = project.reports?.[0]
 
   return (
     <motion.div
@@ -298,6 +300,9 @@ export function ProjectDetailView() {
           </div>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => navigate('intake', project.id)}>
+            <ClipboardList className="mr-2 size-4" /> Questionnaire
+          </Button>
           <Button size="sm" onClick={() => navigate('new-project')}>
             <RefreshCw className="mr-2 size-4" /> Modifier
           </Button>
@@ -370,25 +375,28 @@ export function ProjectDetailView() {
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Ajouter un document</DialogTitle>
-                      <DialogDescription>Entrez le nom du fichier pour la démonstration</DialogDescription>
+                      <DialogDescription>Sélectionnez un fichier PDF, DOCX, TXT ou Markdown de 10 Mo maximum.</DialogDescription>
                     </DialogHeader>
                     <div className="py-4">
-                      <div className="flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-8 text-center">
+                      <label htmlFor="project-document-upload" className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-8 text-center hover:bg-muted/40">
                         <Upload className="size-10 text-muted-foreground" />
-                        <p className="text-sm text-muted-foreground">Glissez vos fichiers ici (démonstration)</p>
-                      </div>
+                        <p className="text-sm text-muted-foreground">
+                          {uploadFile ? uploadFile.name : 'Cliquez pour choisir un document'}
+                        </p>
+                      </label>
                       <div className="mt-4 space-y-2">
                         <input
-                          className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                          placeholder="Nom du fichier (ex: memoire.pdf)"
-                          value={uploadFilename}
-                          onChange={(e) => setUploadFilename(e.target.value)}
+                          id="project-document-upload"
+                          type="file"
+                          accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
+                          className="sr-only"
+                          onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
                         />
                       </div>
                     </div>
                     <DialogFooter>
                       <Button variant="outline" onClick={() => setUploadOpen(false)}>Annuler</Button>
-                      <Button onClick={handleUploadDocument} disabled={uploading || !uploadFilename}>
+                      <Button onClick={handleUploadDocument} disabled={uploading || !uploadFile}>
                         {uploading && <Loader2 className="mr-2 size-4 animate-spin" />}
                         Ajouter
                       </Button>
@@ -423,7 +431,13 @@ export function ProjectDetailView() {
                             <Badge variant="secondary" className="text-[10px]">
                               {doc.status === 'uploaded' ? 'Indexé' : doc.status}
                             </Badge>
-                            <Button variant="ghost" size="icon" className="size-7 text-muted-foreground hover:text-destructive">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7 text-muted-foreground hover:text-destructive"
+                              onClick={() => handleDeleteDocument(doc.id)}
+                              aria-label={`Supprimer ${doc.originalName}`}
+                            >
                               <Trash2 className="size-3.5" />
                             </Button>
                           </div>
@@ -462,7 +476,7 @@ export function ProjectDetailView() {
                         Le résumé RAG analyse vos documents et génère une synthèse structurée
                       </p>
                     </div>
-                    <Button size="sm" onClick={handleGenerateSummary} disabled={generatingSummary || !project.documents?.length}>
+                    <Button size="sm" onClick={handleGenerateSummary} disabled={generatingSummary}>
                       {generatingSummary ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Sparkles className="mr-2 size-4" />}
                       Générer le résumé
                     </Button>
@@ -526,7 +540,7 @@ export function ProjectDetailView() {
                     <Button
                       size="sm"
                       onClick={handleGenerateReport}
-                      disabled={generatingReport || !latestSummary}
+                      disabled={generatingReport}
                     >
                       {generatingReport ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Play className="mr-2 size-4" />}
                       Générer le rapport

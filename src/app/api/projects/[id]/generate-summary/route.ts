@@ -1,200 +1,134 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { v4 as uuidv4 } from 'uuid';
-import { generateFrenchSummary } from '@/lib/types';
+import { NextRequest, NextResponse } from 'next/server'
+import { v4 as uuidv4 } from 'uuid'
 
-export const runtime = 'nodejs';
+import { db } from '@/lib/db'
+import { getAuthenticatedUser } from '@/lib/auth'
+import { generateSummaryForProject } from '@/lib/report-generation'
 
-// POST /api/projects/[id]/generate-summary - Generate a RAG summary
+export const runtime = 'nodejs'
+export const maxDuration = 180
+
 export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id } = await params
+  const user = await getAuthenticatedUser()
+  if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
+
+  const project = await db.project.findFirst({
+    where: { id, userId: user.id },
+    include: {
+      documents: true,
+      briefs: { orderBy: { version: 'desc' }, take: 1 },
+    },
+  })
+  if (!project) return NextResponse.json({ error: 'Projet non trouvé' }, { status: 404 })
+
+  const sourceChunks = await db.embedding.findMany({
+    where: { projectId: id },
+    orderBy: { chunkIndex: 'asc' },
+    take: 30,
+    select: { content: true },
+  })
+
+  const job = await db.generationJob.create({
+    data: {
+      id: uuidv4(),
+      userId: user.id,
+      projectId: id,
+      type: 'summary',
+      status: 'PROCESSING',
+      progress: 20,
+      progressMessage: 'Génération de la synthèse en cours…',
+      startedAt: new Date(),
+    },
+  })
+  await db.project.update({ where: { id }, data: { status: 'SUMMARIZING' } })
+
   try {
-    const { id } = await params;
+    const generated = await generateSummaryForProject({
+      title: project.title,
+      brief: project.brief,
+      academicLevel: project.academicLevel,
+      university: project.university,
+      field: project.field,
+      language: project.language,
+      sourceNames: project.documents.map((document) => document.originalName),
+      sourceExcerpts: sourceChunks.map((chunk) => chunk.content),
+      structuredBrief: project.briefs[0]?.content,
+    })
 
-    const project = await db.project.findUnique({
-      where: { id },
-      include: { documents: true },
-    });
-
-    if (!project) {
-      return NextResponse.json(
-        { error: 'Projet non trouvé' },
-        { status: 404 }
-      );
-    }
-
-    if (project.documents.length === 0) {
-      return NextResponse.json(
-        { error: 'Ajoutez au moins un document avant de générer une synthèse' },
-        { status: 400 }
-      );
-    }
-
-    // Update project status to SUMMARIZING
-    await db.project.update({
-      where: { id },
-      data: { status: 'SUMMARIZING' },
-    });
-
-    // Create generation job
-    const jobId = uuidv4();
-    const job = await db.generationJob.create({
+    const latest = await db.summary.findFirst({
+      where: { projectId: id },
+      orderBy: { version: 'desc' },
+      select: { version: true },
+    })
+    const summary = await db.summary.create({
       data: {
-        id: jobId,
-        userId: project.userId,
+        id: uuidv4(),
         projectId: id,
-        type: 'summary',
-        status: 'PENDING',
-        progress: 0,
-        progressMessage: 'Initialisation de la génération...',
+        version: (latest?.version ?? 0) + 1,
+        content: generated.content,
+        structure: JSON.stringify({
+          title: project.title,
+          provider: generated.provider,
+          model: generated.model,
+          sourceNames: project.documents.map((document) => document.originalName),
+        }),
+        status: 'SUMMARY_READY',
       },
-    });
+    })
 
-    // Simulate async summary generation
-    setTimeout(async () => {
-      try {
-        // Update job to processing
-        await db.generationJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'PROCESSING',
-            progress: 20,
-            progressMessage: 'Analyse des documents en cours...',
-            startedAt: new Date(),
-          },
-        });
-
-        await new Promise((r) => setTimeout(r, 1500));
-
-        await db.generationJob.update({
-          where: { id: jobId },
-          data: {
-            progress: 50,
-            progressMessage: 'Extraction des concepts clés...',
-          },
-        });
-
-        await new Promise((r) => setTimeout(r, 1500));
-
-        await db.generationJob.update({
-          where: { id: jobId },
-          data: {
-            progress: 75,
-            progressMessage: 'Synthèse bibliographique en cours...',
-          },
-        });
-
-        await new Promise((r) => setTimeout(r, 1000));
-
-        // Generate the summary content
-        const topic = project.title;
-        const summaryContent = generateFrenchSummary(topic);
-
-        // Get latest version number
-        const existingSummaries = await db.summary.findMany({
-          where: { projectId: id },
-          orderBy: { version: 'desc' },
-          take: 1,
-        });
-
-        const nextVersion = (existingSummaries[0]?.version ?? 0) + 1;
-
-        // Create the summary
-        const summary = await db.summary.create({
-          data: {
-            id: uuidv4(),
-            projectId: id,
-            version: nextVersion,
-            content: summaryContent,
-            structure: JSON.stringify({
-              title: topic,
-              keyPoints: [
-                'Approche méthodologique rigoureuse',
-                'Revue systématique de la littérature',
-                'Identification des lacunes de la recherche',
-              ],
-              methodology: 'RAG (Retrieval Augmented Generation)',
-              findings: [
-                'Convergence des approches modernes',
-                'Amélioration significative des performances',
-                'Besoin d\'outils standardisés',
-              ],
-              gaps: [
-                'Documentation insuffisante sur la migration',
-                'Manque de métriques normalisées',
-                'Complexité d\'intégration sous-estimée',
-              ],
-            }),
-            status: 'SUMMARY_READY',
-          },
-        });
-
-        // Complete the job
-        await db.generationJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'COMPLETED',
-            progress: 100,
-            progressMessage: 'Synthèse générée avec succès',
-            outputData: JSON.stringify({ summaryId: summary.id }),
-            completedAt: new Date(),
-          },
-        });
-
-        // Update project status
-        await db.project.update({
-          where: { id },
-          data: { status: 'SUMMARY_READY' },
-        });
-
-        // Record API usage
-        await db.apiUsage.create({
-          data: {
-            userId: project.userId,
-            projectId: id,
-            type: 'summary_generation',
-            inputTokens: 12000 + Math.floor(Math.random() * 3000),
-            outputTokens: 3000 + Math.floor(Math.random() * 1000),
-            costUsd: 0.05 + Math.random() * 0.05,
-          },
-        });
-
-        // Increment credits used
-        await db.user.update({
-          where: { id: project.userId },
-          data: { creditsUsed: { increment: 1 } },
-        });
-      } catch (err) {
-        console.error('Summary generation error:', err);
-        await db.generationJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'FAILED',
-            progressMessage: 'Erreur lors de la génération',
-            errorMessage: 'Échec de la génération de la synthèse',
-            completedAt: new Date(),
-          },
-        });
-
-        await db.project.update({
-          where: { id },
-          data: { status: 'DRAFT' },
-        });
-      }
-    }, 500);
+    await db.$transaction([
+      db.generationJob.update({
+        where: { id: job.id },
+        data: {
+          status: 'COMPLETED',
+          progress: 100,
+          progressMessage: 'Synthèse générée avec succès',
+          outputData: JSON.stringify({ summaryId: summary.id, provider: generated.provider, model: generated.model }),
+          completedAt: new Date(),
+        },
+      }),
+      db.project.update({ where: { id }, data: { status: 'SUMMARY_READY' } }),
+      db.apiUsage.create({
+        data: {
+          userId: user.id,
+          projectId: id,
+          type: 'summary_generation',
+          inputTokens: generated.inputTokens,
+          outputTokens: generated.outputTokens,
+          costUsd: 0,
+        },
+      }),
+      db.user.update({ where: { id: user.id }, data: { creditsUsed: { increment: 1 } } }),
+    ])
 
     return NextResponse.json({
       jobId: job.id,
-      status: 'PENDING',
-      message: 'Génération de la synthèse lancée',
-    });
+      summaryId: summary.id,
+      status: 'COMPLETED',
+      provider: generated.provider,
+      model: generated.model,
+      message: generated.provider === 'openai'
+        ? 'Synthèse générée par IA'
+        : 'Synthèse de démonstration générée localement',
+    })
   } catch (error) {
-    console.error('POST /api/projects/[id]/generate-summary error:', error);
-    return NextResponse.json(
-      { error: 'Erreur lors du lancement de la génération' },
-      { status: 500 }
-    );
+    console.error('POST /api/projects/[id]/generate-summary error:', error)
+    await db.$transaction([
+      db.generationJob.update({
+        where: { id: job.id },
+        data: {
+          status: 'FAILED',
+          progressMessage: 'Échec de la génération',
+          errorMessage: error instanceof Error ? error.message.slice(0, 500) : 'Erreur inconnue',
+          completedAt: new Date(),
+        },
+      }),
+      db.project.update({ where: { id }, data: { status: 'DRAFT' } }),
+    ])
+    return NextResponse.json({ error: 'La génération de la synthèse a échoué' }, { status: 502 })
   }
 }

@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getAuthenticatedUser } from '@/lib/auth';
+import { z } from 'zod/v4';
+import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input';
 
 export const runtime = 'nodejs';
+
+const regenerateSectionSchema = z.object({
+  sectionId: z.string().trim().min(1).max(100),
+  instructions: z.string().trim().max(2_000).optional(),
+}).strict();
 
 // Pool de contenus alternatifs pour chaque type de section
 const SECTION_TEMPLATES: Record<string, (title: string, instructions?: string) => string> = {
@@ -41,9 +49,11 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
+    const user = await getAuthenticatedUser();
+    if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
 
-    const report = await db.report.findUnique({
-      where: { id },
+    const report = await db.report.findFirst({
+      where: { id, project: { userId: user.id } },
       include: { project: true },
     });
 
@@ -54,18 +64,7 @@ export async function POST(
       );
     }
 
-    const body = await request.json();
-    const { sectionId, instructions } = body as {
-      sectionId: string;
-      instructions?: string;
-    };
-
-    if (!sectionId) {
-      return NextResponse.json(
-        { error: 'sectionId est requis' },
-        { status: 400 }
-      );
-    }
+    const { sectionId, instructions } = await readJsonBody(request, regenerateSectionSchema);
 
     let sections = JSON.parse(report.sections) as Array<{
       id: string;
@@ -144,6 +143,11 @@ export async function POST(
     });
   } catch (error) {
     console.error('POST /api/reports/[id]/regenerate-section error:', error);
+    const requestError = apiRequestErrorResponse(error);
+    if (requestError) return requestError;
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: 'Données invalides', details: error.issues }, { status: 400 });
+    }
     return NextResponse.json(
       { error: 'Erreur lors de la régénération de la section' },
       { status: 500 }

@@ -4,6 +4,7 @@ import { generateFrenchSummary, generateFrenchReportSections } from '@/lib/types
 const DEMO_USER_EMAIL = 'demo@rapportgen.fr';
 const DEMO_USER_NAME = 'Étudiant Démo';
 const DEMO_USER_ID = 'demo-user-001';
+const DEMO_ADMIN_ID = 'demo-admin-001';
 
 const DEMO_PROJECTS = [
   {
@@ -160,8 +161,24 @@ export async function seedDatabase() {
       name: DEMO_USER_NAME,
       image: null,
       tier: 'PRO',
+      role: 'USER',
+      isActive: true,
       creditsUsed: 7,
       creditsLimit: 50,
+    },
+  });
+
+  await db.user.create({
+    data: {
+      id: DEMO_ADMIN_ID,
+      email: 'admin.demo@rapportgen.fr',
+      name: 'Administrateur Démo',
+      image: null,
+      tier: 'PRO',
+      role: 'ADMIN',
+      isActive: true,
+      creditsUsed: 0,
+      creditsLimit: 999,
     },
   });
 
