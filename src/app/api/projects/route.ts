@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { z } from 'zod/v4';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input';
+import { notifyAdministrators } from '@/lib/notifications';
 
 export const runtime = 'nodejs';
 
@@ -15,7 +16,7 @@ const createProjectSchema = z.object({
   language: z.string().optional().default('fr'),
 }).strict();
 
-// GET /api/projects - List all projects with details
+// GET /api/projects - Users see their projects; administrators see the full platform portfolio.
 export async function GET() {
   try {
     const user = await getAuthenticatedUser();
@@ -24,9 +25,12 @@ export async function GET() {
     }
 
     const projects = await db.project.findMany({
-      where: { userId: user.id },
+      where: user.role === 'ADMIN' ? undefined : { userId: user.id },
       orderBy: { updatedAt: 'desc' },
       include: {
+        user: {
+          select: { id: true, name: true, email: true },
+        },
         _count: {
           select: {
             documents: true,
@@ -52,14 +56,12 @@ export async function GET() {
           },
         });
 
-        return {
-          ...project,
-          latestReport,
-        };
+        const { user: owner, ...projectDetails } = project;
+        return { ...projectDetails, owner, latestReport };
       })
     );
 
-    return NextResponse.json({ projects: projectsWithDetails });
+    return NextResponse.json({ projects: projectsWithDetails, scope: user.role === 'ADMIN' ? 'ALL' : 'OWN' });
   } catch (error) {
     console.error('GET /api/projects error:', error);
     return NextResponse.json(
@@ -79,16 +81,27 @@ export async function POST(request: NextRequest) {
 
     const validated = await readJsonBody(request, createProjectSchema);
 
-    const project = await db.project.create({
-      data: {
-        title: validated.title,
-        brief: validated.brief,
-        academicLevel: validated.academicLevel,
-        university: validated.university,
-        field: validated.field,
-        language: validated.language,
-        userId: user.id,
-      },
+    const project = await db.$transaction(async (transaction) => {
+      const created = await transaction.project.create({
+        data: {
+          title: validated.title,
+          brief: validated.brief,
+          academicLevel: validated.academicLevel,
+          university: validated.university,
+          field: validated.field,
+          language: validated.language,
+          userId: user.id,
+        },
+      });
+      const owner = await transaction.user.findUnique({ where: { id: user.id }, select: { name: true, email: true } });
+      await notifyAdministrators({
+        type: 'PROJECT_CREATED',
+        title: 'Nouveau projet créé',
+        message: `${owner?.name ?? owner?.email ?? user.id} a créé « ${created.title} »`,
+        linkView: 'dashboard',
+        metadata: { projectId: created.id, ownerId: user.id },
+      }, [user.id], transaction);
+      return created;
     });
 
     return NextResponse.json({ project }, { status: 201 });

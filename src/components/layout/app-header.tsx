@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Bell, Search } from 'lucide-react'
+import { Bell } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import { useAppStore } from '@/lib/store'
 import { SidebarTrigger } from '@/components/ui/sidebar'
@@ -35,6 +35,16 @@ interface HeaderUser {
   role?: 'USER' | 'ADMIN'
 }
 
+interface AppNotification {
+  id: string
+  type: string
+  title: string
+  message: string
+  linkView: string | null
+  metadata: { requestId?: string }
+  createdAt: string
+}
+
 const viewLabels: Record<AppView, string> = {
   dashboard: 'Tableau de bord',
   'new-project': 'Nouveau Projet',
@@ -60,6 +70,8 @@ export function AppHeader() {
   const { data: session } = useSession()
   const demoMode = process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_AUTH_ALLOW_DEMO === 'true'
   const [demoUser, setDemoUser] = useState<HeaderUser | null>(null)
+  const [notifications, setNotifications] = useState<AppNotification[]>([])
+  const [notificationCount, setNotificationCount] = useState(0)
 
   useEffect(() => {
     if (!demoMode) return
@@ -69,7 +81,7 @@ export function AppHeader() {
       .catch(() => undefined)
   }, [demoMode])
 
-  async function switchDemoUser(userId: 'demo-user-001' | 'demo-admin-001') {
+  async function switchDemoUser(userId: 'demo-user-001' | 'demo-admin-001' | 'demo-admin-002') {
     const response = await secureFetch('/api/demo/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -79,6 +91,52 @@ export function AppHeader() {
   }
 
   const currentUser: HeaderUser | undefined = demoUser ?? session?.user
+
+  useEffect(() => {
+    if (!currentUser?.id) return
+    fetch('/api/notifications?page=1&pageSize=10')
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => setNotificationCount(data?.pagination?.total ?? 0))
+      .catch(() => undefined)
+  }, [currentUser?.id])
+
+  async function openNotifications(open: boolean) {
+    if (!open) { setNotifications([]); return }
+    const response = await fetch('/api/notifications?page=1&pageSize=10')
+    if (!response.ok) return
+    const data = await response.json() as { notifications: AppNotification[] }
+    setNotifications(data.notifications)
+    const seenNotifications = data.notifications.filter((item) => item.type !== 'ROLE_APPROVAL_REQUIRED')
+    if (seenNotifications.length > 0) {
+      await secureFetch('/api/notifications', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: seenNotifications.map((item) => item.id) }),
+      })
+      setNotificationCount((count) => Math.max(0, count - seenNotifications.length))
+    }
+  }
+
+  async function reviewRoleFromNotification(notification: AppNotification, decision: 'APPROVE' | 'REJECT') {
+    if (!notification.metadata.requestId) return
+    const response = await secureFetch(`/api/admin/role-requests/${notification.metadata.requestId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }),
+    })
+    if (response.ok) {
+      await secureFetch('/api/notifications', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [notification.id] }) })
+      setNotifications((current) => current.filter((item) => item.id !== notification.id))
+      setNotificationCount((count) => Math.max(0, count - 1))
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    const response = await secureFetch('/api/notifications', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }),
+    })
+    if (response.ok) {
+      setNotifications([])
+      setNotificationCount(0)
+    }
+  }
 
   const breadcrumbParent = viewParentMap[currentView]
 
@@ -118,18 +176,17 @@ export function AppHeader() {
       </span>
 
       <div className="ml-auto flex items-center gap-1">
-        {/* Search button (decorative) */}
-        <Button variant="ghost" size="icon" className="size-8">
-          <Search className="size-4" />
-          <span className="sr-only">Rechercher</span>
-        </Button>
-
-        {/* Notification bell (decorative) */}
-        <Button variant="ghost" size="icon" className="size-8 relative">
-          <Bell className="size-4" />
-          <span className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-accent" />
-          <span className="sr-only">Notifications</span>
-        </Button>
+        <DropdownMenu onOpenChange={(open) => void openNotifications(open)}>
+          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="relative size-8"><Bell className="size-4" />{notificationCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[9px] font-semibold text-white">{notificationCount > 99 ? '99+' : notificationCount}</span>}<span className="sr-only">Notifications non lues : {notificationCount}</span></Button></DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-80">
+            <DropdownMenuLabel className="flex items-center justify-between gap-3"><span>Notifications récentes</span><Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={notificationCount === 0 && notifications.length === 0} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void markAllNotificationsRead() }}>Tout marquer comme lu</Button></DropdownMenuLabel><DropdownMenuSeparator />
+            {notifications.map((notification) => notification.type === 'ROLE_APPROVAL_REQUIRED'
+              ? <div key={notification.id} className="space-y-2 px-2 py-3"><p className="text-sm font-medium">{notification.title}</p><p className="text-xs text-muted-foreground">{notification.message}</p><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void reviewRoleFromNotification(notification, 'REJECT')}>Refuser</Button><Button size="sm" onClick={() => void reviewRoleFromNotification(notification, 'APPROVE')}>Approuver</Button></div></div>
+              : <DropdownMenuItem key={notification.id} className="flex cursor-pointer flex-col items-start gap-1 py-3" onClick={() => notification.linkView && navigate(notification.linkView as AppView)}><span className="font-medium">{notification.title}</span><span className="whitespace-normal text-xs text-muted-foreground">{notification.message}</span><span className="text-[10px] text-muted-foreground">{new Date(notification.createdAt).toLocaleString('fr-FR')}</span></DropdownMenuItem>)}
+            {notifications.length === 0 && <DropdownMenuItem disabled>Aucune nouvelle notification</DropdownMenuItem>}
+            {notifications.length > 0 && <><DropdownMenuSeparator /><DropdownMenuLabel className="text-[10px] font-normal text-muted-foreground">Ces notifications sont retirées du fil après cette consultation.</DropdownMenuLabel></>}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* User avatar dropdown (decorative) */}
         <DropdownMenu>
@@ -160,7 +217,10 @@ export function AppHeader() {
                   Étudiant démo
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => switchDemoUser('demo-admin-001')}>
-                  Administrateur démo
+                  Administrateur démo (propriétaire)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => switchDemoUser('demo-admin-002')}>
+                  Validateur démo
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
               </>

@@ -24,6 +24,11 @@ export interface ProjectWithDetails {
     status: string;
     createdAt: Date;
   } | null;
+  owner?: {
+    id: string;
+    name: string | null;
+    email: string | null;
+  };
 }
 
 export interface ProjectFull {

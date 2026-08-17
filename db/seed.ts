@@ -142,6 +142,8 @@ const DEMO_DOCUMENTS = [
 
 export async function seedDatabase() {
   // Clean existing data (in reverse dependency order)
+  await db.adminAuditLog.deleteMany();
+  await db.apiUsageMonthly.deleteMany();
   await db.apiUsage.deleteMany();
   await db.embedding.deleteMany();
   await db.generationJob.deleteMany();
@@ -349,6 +351,30 @@ export async function seedDatabase() {
         inputTokens: 15000,
         outputTokens: 4500,
         costUsd: 0.14,
+      },
+    ],
+  });
+
+  await db.adminAuditLog.createMany({
+    data: [
+      {
+        actorId: DEMO_ADMIN_ID,
+        action: 'PLATFORM_REVIEW',
+        targetType: 'SYSTEM',
+        targetLabel: 'Plateforme',
+        summary: 'Vérification quotidienne de la plateforme terminée',
+        metadata: { source: 'seed' },
+        createdAt: new Date(Date.now() - 1000 * 60 * 42),
+      },
+      {
+        actorId: DEMO_ADMIN_ID,
+        action: 'USER_TIER_UPDATED',
+        targetType: 'USER',
+        targetId: DEMO_USER_ID,
+        targetLabel: DEMO_USER_NAME,
+        summary: 'Plan utilisateur passé à Pro',
+        metadata: { before: { tier: 'STARTER' }, after: { tier: 'PRO' } },
+        createdAt: new Date(Date.now() - 1000 * 60 * 60 * 20),
       },
     ],
   });

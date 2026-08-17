@@ -70,7 +70,13 @@ export function AppSidebar() {
   useEffect(() => {
     fetch('/api/user')
       .then((response) => response.ok ? response.json() : null)
-      .then((data) => setApiUser(data?.user ?? null))
+      .then((data) => {
+        const user = data?.user ?? null
+        setApiUser(user)
+        if (user?.role === 'ADMIN' && useAppStore.getState().currentView === 'dashboard') {
+          useAppStore.getState().navigate('admin')
+        }
+      })
       .catch(() => undefined)
   }, [])
 
@@ -112,7 +118,7 @@ export function AppSidebar() {
                 <SidebarMenuItem>
                   <SidebarMenuButton isActive={currentView === 'admin'} tooltip="Administration" onClick={() => handleNavigate('admin')}>
                     <ShieldCheck className="size-4" />
-                    <span>Utilisateurs & activité</span>
+                    <span>Console d'administration</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>

@@ -28,6 +28,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
+import { TablePagination } from '@/components/ui/table-pagination'
 
 import { useAppStore } from '@/lib/store'
 import { secureFetch } from '@/lib/secure-fetch'
@@ -63,8 +64,10 @@ export function DashboardView() {
   const [projects, setProjects] = useState<ProjectWithDetails[]>([])
   const [user, setUser] = useState<UserWithStats | null>(null)
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null)
+  const [projectScope, setProjectScope] = useState<'OWN' | 'ALL'>('OWN')
   const [loading, setLoading] = useState(true)
   const [seeding, setSeeding] = useState(false)
+  const [projectPage, setProjectPage] = useState(1)
 
   useEffect(() => {
     loadData()
@@ -80,6 +83,8 @@ export function DashboardView() {
       if (projectsRes.ok) {
         const data = await projectsRes.json()
         setProjects(data.projects ?? [])
+        setProjectPage(1)
+        setProjectScope(data.scope === 'ALL' ? 'ALL' : 'OWN')
       }
       if (userRes.ok) {
         const data = await userRes.json()
@@ -110,9 +115,12 @@ export function DashboardView() {
     }
   }
 
-  const totalReports = usageStats?.totalReports ?? 0
-  const totalDocuments = usageStats?.totalDocuments ?? 0
-  const totalProjects = usageStats?.totalProjects ?? projects.length
+  const isAdminPortfolio = projectScope === 'ALL' && user?.role === 'ADMIN'
+  const projectPageSize = 10
+  const pagedProjects = projects.slice((projectPage - 1) * projectPageSize, projectPage * projectPageSize)
+  const totalReports = isAdminPortfolio ? projects.reduce((total, project) => total + project._count.reports, 0) : usageStats?.totalReports ?? 0
+  const totalDocuments = isAdminPortfolio ? projects.reduce((total, project) => total + project._count.documents, 0) : usageStats?.totalDocuments ?? 0
+  const totalProjects = isAdminPortfolio ? projects.length : usageStats?.totalProjects ?? projects.length
   const creditsUsed = user?.creditsUsed ?? 0
   const creditsLimit = user?.creditsLimit ?? 0
 
@@ -153,7 +161,7 @@ export function DashboardView() {
             Tableau de bord
           </h1>
           <p className="text-muted-foreground">
-            Vue d'ensemble de vos projets et activités
+            {isAdminPortfolio ? "Vue d'ensemble de tous les projets de la plateforme" : "Vue d'ensemble de vos projets et activités"}
           </p>
         </div>
         {demoMode && (
@@ -210,7 +218,7 @@ export function DashboardView() {
       <motion.div variants={itemVariants}>
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-lg">Projets Récents</CardTitle>
+            <CardTitle className="text-lg">{isAdminPortfolio ? 'Tous les projets' : 'Projets récents'}</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             {loading ? (
@@ -240,6 +248,7 @@ export function DashboardView() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Titre</TableHead>
+                      {isAdminPortfolio && <TableHead>Propriétaire</TableHead>}
                       <TableHead className="hidden sm:table-cell">Statut</TableHead>
                       <TableHead className="hidden md:table-cell">Niveau</TableHead>
                       <TableHead className="hidden lg:table-cell">Dernière MAJ</TableHead>
@@ -247,11 +256,17 @@ export function DashboardView() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {projects.map((project) => (
+                    {pagedProjects.map((project) => (
                       <TableRow key={project.id}>
                         <TableCell className="font-medium max-w-[200px] truncate">
                           {project.title}
                         </TableCell>
+                        {isAdminPortfolio && (
+                          <TableCell>
+                            <p className="max-w-48 truncate text-sm">{project.owner?.name ?? project.owner?.email ?? 'Utilisateur'}</p>
+                            <p className="max-w-48 truncate text-xs text-muted-foreground">{project.owner?.email ?? `ID : ${project.owner?.id ?? 'inconnu'}`}</p>
+                          </TableCell>
+                        )}
                         <TableCell className="hidden sm:table-cell">
                           <Badge
                             variant="secondary"
@@ -267,7 +282,7 @@ export function DashboardView() {
                           {formatDate(project.updatedAt)}
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
+                          {project.userId === user?.id ? <div className="flex items-center justify-end gap-1">
                             <Button
                               variant="ghost"
                               size="icon"
@@ -286,7 +301,7 @@ export function DashboardView() {
                             >
                               <Play className="size-4" />
                             </Button>
-                          </div>
+                          </div> : <Badge variant="outline" className="font-normal">Lecture admin</Badge>}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -295,21 +310,7 @@ export function DashboardView() {
               </div>
             )}
           </CardContent>
-          {projects.length > 0 && (
-            <div className="border-t px-4 py-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-primary"
-                onClick={() => {
-                  // Could navigate to a full projects list, for now just scroll
-                  toast.info('Tous les projets sont affichés')
-                }}
-              >
-                Voir tous les projets
-              </Button>
-            </div>
-          )}
+          <TablePagination page={projectPage} pageSize={projectPageSize} total={projects.length} onPageChange={setProjectPage} />
         </Card>
       </motion.div>
 

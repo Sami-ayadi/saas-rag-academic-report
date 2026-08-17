@@ -24,6 +24,28 @@ Work Log:
 - Verified all API routes work: seed (4 projects, 8 docs, 1 report, 2 summaries), projects listing, pricing, user stats
 - Browser-verified: Dashboard loads with data, project detail with tabs, report editor split-view with section inspector, pricing page, new project form
 - ESLint: 0 errors in src/ (only pre-existing script errors)
+- Added a configurable 90–180 day retention policy for detailed AI usage records (180 days by default)
+- Added monthly per-user and per-operation AI usage aggregation before detailed records are deleted
+- Added admin and authenticated scheduled maintenance endpoints, retention visibility, and audit events
+- Added a pre-archive review with per-record, reversible retention exemptions and complete paginated disclosure
+- Added an administrator-wide project portfolio to the regular dashboard while preserving per-user isolation
+- Added clickable admin user profiles that load every project owned by the selected user
+- Added project owner email/ID context to administrator dashboard project listings
+- Added a dedicated user creation-date column and sortable headers for every user-table parameter
+- Replaced the misleading always-green database status with an honest, configurable latest-backup signal
+- Added a dedicated administrators tab with current admin accounts and pending role approvals
+- Added two-person role changes: requesters and affected users cannot approve their own request
+- Restricted ADMIN promotion requests and initial Google SSO bootstrap to configured platform-owner identities
+- Added a second selectable demo administrator and a pending promotion so the approval workflow can be tested
+- Added reusable pagination to users, administrators, admin candidates, jobs, logs, dashboard projects, and per-user project details
+- Removed the standalone empty role-approval card and moved actionable approvals into administrator notifications
+- Added persistent database-backed notifications with unread counts and automatic removal after viewing
+- Added user-facing notifications for account changes, role decisions, cancelled jobs, and completed or failed generations
+- Added administrator audience charts for age ranges, declared gender, active sessions, and average session duration
+- Moved audience analytics into a dedicated Administration > Statistiques page and replaced bar/number summaries with interactive donut charts
+- Added administrator notifications for newly enrolled users and newly created projects
+- Added a notification-menu action to mark every unread notification as read
+- Removed the decorative header search icon and updated administration charts to a red-and-blue palette
 
 Stage Summary:
 - Complete SaaS RAG platform with 7 views, 12 API routes, 9 DB tables

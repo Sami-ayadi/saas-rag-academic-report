@@ -43,6 +43,19 @@ enum IntakeStatus {
   APPROVED
 }
 
+enum AuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum RoleChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 // ==================== TABLES ====================
 
 model User {
@@ -50,6 +63,8 @@ model User {
   email            String?   @unique
   emailVerified    DateTime?
   name             String?
+  birthDate        DateTime?
+  gender           String?
   image            String?
   tier             Tier      @default(FREE)
   role             Role      @default(USER)
@@ -62,10 +77,67 @@ model User {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  projects Project[]
-  jobs     GenerationJob[]
-  accounts Account[]
-  sessions Session[]
+  projects       Project[]
+  jobs           GenerationJob[]
+  accounts       Account[]
+  sessions       Session[]
+  adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
+  notifications  Notification[]
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  message   String
+  linkView  String?
+  metadata  Json     @default("{}")
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+model AdminAuditLog {
+  id          String        @id @default(cuid())
+  actorId     String?
+  action      String
+  severity    AuditSeverity @default(INFO)
+  targetType  String
+  targetId    String?
+  targetLabel String?
+  summary     String
+  metadata    Json          @default("{}")
+  createdAt   DateTime      @default(now())
+
+  actor User? @relation("AdminAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([action])
+  @@index([targetId])
+}
+
+model RoleChangeRequest {
+  id            String           @id @default(cuid())
+  targetUserId  String
+  requestedById String
+  currentRole   Role
+  requestedRole Role
+  status        RoleChangeStatus @default(PENDING)
+  reason        String?
+  reviewedById  String?
+  reviewReason  String?
+  reviewedAt    DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([status, createdAt])
+  @@index([targetUserId])
+  @@index([requestedById])
 }
 
 model Account {
@@ -93,6 +165,8 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
+  createdAt    DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -253,15 +327,35 @@ model Embedding {
 }
 
 model ApiUsage {
-  id           String   @id @default(cuid())
-  userId       String
-  projectId    String?
-  type         String
-  inputTokens  Int      @default(0)
-  outputTokens Int      @default(0)
-  costUsd      Float    @default(0)
-  createdAt    DateTime @default(now())
+  id                String    @id @default(cuid())
+  userId            String
+  projectId         String?
+  type              String
+  inputTokens       Int       @default(0)
+  outputTokens      Int       @default(0)
+  costUsd           Float     @default(0)
+  retentionExempt   Boolean   @default(false)
+  retentionReason   String?
+  retentionMarkedAt DateTime?
+  retentionMarkedBy String?
+  createdAt         DateTime  @default(now())
 
   @@index([userId])
   @@index([createdAt])
+  @@index([retentionExempt, createdAt])
+}
+
+model ApiUsageMonthly {
+  month            DateTime
+  userId           String
+  type             String
+  inputTokens      Int      @default(0)
+  outputTokens     Int      @default(0)
+  costUsd          Float    @default(0)
+  requestCount     Int      @default(0)
+  lastAggregatedAt DateTime @updatedAt
+
+  @@id([month, userId, type])
+  @@index([month])
+  @@index([userId])
 }

@@ -4,6 +4,7 @@ import { z } from 'zod/v4'
 import { db } from '@/lib/db'
 import {
   DEMO_ADMIN_ID,
+  DEMO_REVIEWER_ID,
   DEMO_STUDENT_ID,
   DEMO_USER_COOKIE,
   ensureDemoUsers,
@@ -14,7 +15,7 @@ import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input'
 export const runtime = 'nodejs'
 
 const switchDemoUserSchema = z.object({
-  userId: z.enum([DEMO_STUDENT_ID, DEMO_ADMIN_ID]),
+  userId: z.enum([DEMO_STUDENT_ID, DEMO_ADMIN_ID, DEMO_REVIEWER_ID]),
 }).strict()
 
 export async function POST(request: NextRequest) {

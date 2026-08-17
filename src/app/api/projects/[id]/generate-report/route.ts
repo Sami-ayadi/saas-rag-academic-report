@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 
 import { db } from '@/lib/db'
+import { createNotification } from '@/lib/notifications'
 import { getAuthenticatedUser } from '@/lib/auth'
 import { generateReportForProject } from '@/lib/report-generation'
 
@@ -105,6 +106,7 @@ export async function POST(
       }),
       db.user.update({ where: { id: user.id }, data: { creditsUsed: { increment: 1 } } }),
     ])
+    await createNotification({ userId: user.id, type: 'GENERATION_COMPLETED', title: 'Rapport prêt', message: `Le rapport de « ${project.title} » est disponible.`, linkView: 'dashboard', metadata: { projectId: id, reportId: report.id } })
 
     return NextResponse.json({
       jobId: job.id,
@@ -133,6 +135,7 @@ export async function POST(
         data: { status: project.summaries.length ? 'SUMMARY_READY' : 'DRAFT' },
       }),
     ])
+    await createNotification({ userId: user.id, type: 'GENERATION_FAILED', title: 'Échec du rapport', message: `Le rapport de « ${project.title} » n'a pas pu être généré.`, linkView: 'dashboard', metadata: { projectId: id, jobId: job.id } })
     return NextResponse.json({ error: 'La génération du rapport a échoué' }, { status: 502 })
   }
 }

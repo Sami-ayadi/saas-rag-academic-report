@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 
 import { db } from '@/lib/db'
+import { createNotification } from '@/lib/notifications'
 import { getAuthenticatedUser } from '@/lib/auth'
 import { generateSummaryForProject } from '@/lib/report-generation'
 
@@ -104,6 +105,7 @@ export async function POST(
       }),
       db.user.update({ where: { id: user.id }, data: { creditsUsed: { increment: 1 } } }),
     ])
+    await createNotification({ userId: user.id, type: 'GENERATION_COMPLETED', title: 'Synthèse prête', message: `La synthèse de « ${project.title} » est disponible.`, linkView: 'dashboard', metadata: { projectId: id, summaryId: summary.id } })
 
     return NextResponse.json({
       jobId: job.id,
@@ -129,6 +131,7 @@ export async function POST(
       }),
       db.project.update({ where: { id }, data: { status: 'DRAFT' } }),
     ])
+    await createNotification({ userId: user.id, type: 'GENERATION_FAILED', title: 'Échec de la synthèse', message: `La synthèse de « ${project.title} » n'a pas pu être générée.`, linkView: 'dashboard', metadata: { projectId: id, jobId: job.id } })
     return NextResponse.json({ error: 'La génération de la synthèse a échoué' }, { status: 502 })
   }
 }
