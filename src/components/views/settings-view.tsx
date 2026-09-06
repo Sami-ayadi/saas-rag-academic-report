@@ -13,6 +13,8 @@ import {
   Upload,
   DollarSign,
   AlertTriangle,
+  RefreshCw,
+  ExternalLink,
 } from 'lucide-react'
 
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -35,6 +37,7 @@ import {
 } from '@/components/ui/dialog'
 
 import { useAppStore } from '@/lib/store'
+import { secureFetch } from '@/lib/secure-fetch'
 import type { UserWithStats } from '@/lib/types'
 import { TIER_LABELS, TIER_COLORS } from '@/lib/constants'
 
@@ -54,8 +57,13 @@ const itemVariants = {
 export function SettingsView() {
   const navigate = useAppStore((s) => s.navigate)
   const [user, setUser] = useState<UserWithStats | null>(null)
+  const [quota, setQuota] = useState<{
+    generation: { used: number; limit: number; remaining: number }
+    regeneration: { used: number; limit: number; remaining: number }
+  } | null>(null)
   const [loading, setLoading] = useState(true)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [portalLoading, setPortalLoading] = useState(false)
 
   // Profile form state (decorative)
   const [name, setName] = useState('')
@@ -73,6 +81,7 @@ export function SettingsView() {
       if (res.ok) {
         const data = await res.json()
         setUser(data.user)
+        setQuota(data.quota ?? null)
         setName(data.user?.name ?? '')
         setUniversity(data.user?.image ?? '') // placeholder — no university on user model
       }
@@ -92,11 +101,32 @@ export function SettingsView() {
     toast.success('Compte supprimé (démonstration)')
   }
 
-  const creditsPercentage = user
-    ? user.creditsLimit > 0
-      ? Math.round((user.creditsUsed / user.creditsLimit) * 100)
-      : 0
-    : 0
+  async function handleOpenPortal() {
+    setPortalLoading(true)
+    try {
+      const res = await secureFetch('/api/billing/portal', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error ?? "Impossible d'ouvrir le portail de facturation")
+        return
+      }
+      if (data.url) {
+        window.location.href = data.url
+      } else {
+        toast.error("Impossible d'ouvrir le portail de facturation")
+      }
+    } catch {
+      toast.error('Erreur réseau lors de la ouverture du portail')
+    } finally {
+      setPortalLoading(false)
+    }
+  }
+
+  // Quota counters come from the canonical entitlement server (period reset,
+  // administrator overrides, regeneration included).
+  const generationLimit = quota?.generation.limit ?? user?.creditsLimit ?? 0
+  const generationUsed = quota?.generation.used ?? user?.creditsUsed ?? 0
+  const creditsPercentage = generationLimit > 0 ? Math.round((generationUsed / generationLimit) * 100) : 0
 
   const userTier = user?.tier?.toUpperCase() ?? 'FREE'
 
@@ -230,9 +260,9 @@ export function SettingsView() {
                 {/* Credits Progress */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Crédits utilisés</span>
+                    <span className="text-muted-foreground">Générations ce mois-ci</span>
                     <span className="font-medium tabular-nums">
-                      {user?.creditsUsed ?? 0} / {user?.creditsLimit ?? 0}
+                      {generationUsed} / {generationLimit}
                     </span>
                   </div>
                   <Progress value={creditsPercentage} className="h-2" />
@@ -273,7 +303,16 @@ export function SettingsView() {
                       <span className="text-xs">Restant</span>
                     </div>
                     <p className="text-lg font-semibold">
-                      {user ? user.creditsLimit - user.creditsUsed : 0}
+                      {generationLimit - generationUsed}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <RefreshCw className="size-3.5" />
+                      <span className="text-xs">Régénérations restantes</span>
+                    </div>
+                    <p className="text-lg font-semibold">
+                      {quota?.regeneration.remaining ?? 0}
                     </p>
                   </div>
                 </div>
@@ -332,6 +371,42 @@ export function SettingsView() {
               </CardFooter>
             </Card>
           </motion.div>
+
+          {/* Billing Management */}
+          {userTier !== 'FREE' && (
+            <motion.div variants={itemVariants}>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <CreditCard className="size-5" />
+                    Gérer mon abonnement
+                  </CardTitle>
+                  <CardDescription>
+                    Accédez au portail de facturation Stripe pour gérer votre moyen de paiement, vos factures et votre abonnement.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <p className="mb-4 text-sm text-muted-foreground">
+                    Plan actuel : <Badge variant="outline">{TIER_LABELS[userTier]}</Badge>
+                  </p>
+                </CardContent>
+                <CardFooter className="border-t pt-4">
+                  <Button
+                    variant="outline"
+                    disabled={portalLoading}
+                    onClick={() => void handleOpenPortal()}
+                  >
+                    {portalLoading ? (
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                    ) : (
+                      <ExternalLink className="mr-2 size-4" />
+                    )}
+                    Ouvrir le portail de facturation
+                  </Button>
+                </CardFooter>
+              </Card>
+            </motion.div>
+          )}
         </>
       )}
     </motion.div>

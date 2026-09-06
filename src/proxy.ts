@@ -113,8 +113,15 @@ export function proxy(request: NextRequest) {
   const isUnsafe = !SAFE_METHODS.has(request.method)
   const isAuthRoute = path.startsWith('/api/auth/')
   const isCsrfRoute = path === '/api/security/csrf'
+  // SECURITY INVARIANT EXCEPTION (documented): /api/webhooks/stripe is the only
+  // CSRF-exempt mutating route. Its caller is Stripe's infrastructure, not a
+  // browser, so it has no CSRF token or same-origin headers by design. The
+  // alternative authenticity check is mandatory: the route rejects any request
+  // whose `stripe-signature` HMAC does not verify against the raw body with
+  // STRIPE_WEBHOOK_SECRET (see src/app/api/webhooks/stripe/route.ts).
+  const isStripeWebhook = path === '/api/webhooks/stripe'
 
-  if (isApi && isUnsafe && !isAuthRoute && !isCsrfRoute) {
+  if (isApi && isUnsafe && !isAuthRoute && !isCsrfRoute && !isStripeWebhook) {
     const fetchSite = request.headers.get('sec-fetch-site')
     if (fetchSite === 'cross-site') return securityFailure('Origine interdite', 403, nonce, true)
 

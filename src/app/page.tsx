@@ -1,6 +1,7 @@
 'use client'
 
-import { signIn, useSession } from 'next-auth/react'
+import { useEffect, useState } from 'react'
+import { getProviders, signIn, useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import {
   ArrowRight,
@@ -22,6 +23,7 @@ import {
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import type { PricingTier } from '@/lib/types'
 
 const features = [
   { icon: BrainCircuit, title: 'Cadrage intelligent', text: 'Un questionnaire guidé transforme votre stage, votre filière et vos objectifs en un brief académique exploitable.' },
@@ -43,11 +45,53 @@ export default function LandingPage() {
   const router = useRouter()
   const { status } = useSession()
   const demoMode = process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_AUTH_ALLOW_DEMO === 'true'
-  const dashboardLabel = demoMode || status === 'authenticated' ? 'Ouvrir le tableau de bord' : 'Commencer avec Google'
+  // Pricing cards render the canonical entitlement module through /api/pricing.
+  const [pricing, setPricing] = useState<PricingTier[]>([])
+  const [googleReady, setGoogleReady] = useState<boolean | null>(null)
 
-  function enterWorkspace() {
-    if (demoMode || status === 'authenticated') router.push('/dashboard')
-    else signIn('google', { callbackUrl: '/dashboard' })
+  useEffect(() => {
+    fetch('/api/pricing', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : { tiers: [] }))
+      .then((data) => setPricing(Array.isArray(data.tiers) ? data.tiers : []))
+      .catch(() => setPricing([]))
+  }, [])
+
+  useEffect(() => {
+    if (demoMode) return
+    let cancelled = false
+    getProviders()
+      .then((providers) => {
+        if (!cancelled) setGoogleReady(Boolean(providers?.google))
+      })
+      .catch(() => {
+        if (!cancelled) setGoogleReady(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [demoMode])
+
+  const dashboardLabel = demoMode || status === 'authenticated'
+    ? 'Ouvrir le tableau de bord'
+    : googleReady === false
+      ? 'Entrer dans l’application'
+      : 'Commencer avec Google'
+
+  async function enterWorkspace() {
+    if (demoMode || status === 'authenticated') {
+      router.push('/dashboard')
+      return
+    }
+    try {
+      const providers = await getProviders()
+      if (providers?.google) {
+        await signIn('google', { callbackUrl: '/dashboard' })
+        return
+      }
+    } catch {
+      // Ignore and let the dashboard sign-in card explain the missing setup.
+    }
+    router.push('/dashboard')
   }
 
   return (
@@ -179,18 +223,19 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl px-5 lg:px-8">
           <div className="text-center"><p className="text-sm font-black uppercase tracking-[0.2em] text-emerald-700">Tarifs simples</p><h2 className="mt-3 text-4xl font-black tracking-tight">Commencez gratuitement, évoluez quand vous êtes prêt.</h2></div>
           <div className="mx-auto mt-14 grid max-w-5xl gap-5 lg:grid-cols-3">
-            {[
-              { name: 'Découverte', price: '0 €', text: 'Tester le cadrage et obtenir un aperçu de 4 pages.', items: ['1 projet actif', 'Aperçu de 4 pages', 'Plan détaillé protégé'] },
-              { name: 'Étudiant', price: '19 €', text: 'Construire et finaliser un rapport complet.', items: ['5 projets actifs', 'Rapport complet', '20 régénérations', 'Exports PDF, DOCX et MD'], featured: true },
-              { name: 'Pro', price: '49 €', text: 'Pour les usages intensifs et les modèles personnalisés.', items: ['Projets étendus', 'Historique des versions', 'Modèles personnalisés', 'Génération prioritaire'] },
-            ].map((tier) => (
-              <article key={tier.name} className={`rounded-3xl border p-7 ${tier.featured ? 'border-emerald-600 bg-slate-950 text-white shadow-2xl shadow-emerald-900/15' : 'border-slate-200 bg-slate-50'}`}>
-                <div className="flex items-center justify-between"><h3 className="text-xl font-bold">{tier.name}</h3>{tier.featured && <Badge className="bg-emerald-500 text-white">Recommandé</Badge>}</div>
-                <p className="mt-5 text-4xl font-black">{tier.price}<span className="text-sm font-medium opacity-60"> / mois</span></p><p className={`mt-3 leading-6 ${tier.featured ? 'text-slate-400' : 'text-slate-600'}`}>{tier.text}</p>
-                <ul className="mt-7 space-y-3 text-sm">{tier.items.map((item) => <li key={item} className="flex gap-2"><Check className="mt-0.5 size-4 shrink-0 text-emerald-500" />{item}</li>)}</ul>
-                <Button onClick={enterWorkspace} className={`mt-8 w-full rounded-full ${tier.featured ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-white text-slate-950 hover:bg-emerald-50'}`} variant={tier.featured ? 'default' : 'outline'}>Choisir {tier.name}<ChevronRight className="ml-1 size-4" /></Button>
-              </article>
-            ))}
+            {pricing.map((tier) => {
+              const featured = tier.recommended === true
+              const priceLabel = tier.price === 0 ? 'Gratuit' : `${tier.price} ${tier.currency}`
+              const periodLabel = tier.period === 'par mois' ? 'mois' : tier.period
+              return (
+                <article key={tier.id} className={`rounded-3xl border p-7 ${featured ? 'border-emerald-600 bg-slate-950 text-white shadow-2xl shadow-emerald-900/15' : 'border-slate-200 bg-slate-50'}`}>
+                  <div className="flex items-center justify-between"><h3 className="text-xl font-bold">{tier.name}</h3>{featured && <Badge className="bg-emerald-500 text-white">Recommandé</Badge>}</div>
+                  <p className="mt-5 text-4xl font-black">{priceLabel}<span className="text-sm font-medium opacity-60"> / {periodLabel}</span></p><p className={`mt-3 leading-6 ${featured ? 'text-slate-400' : 'text-slate-600'}`}>{tier.limits.preview}</p>
+                  <ul className="mt-7 space-y-3 text-sm">{tier.features.map((item) => <li key={item} className="flex gap-2"><Check className="mt-0.5 size-4 shrink-0 text-emerald-500" />{item}</li>)}</ul>
+                  <Button onClick={enterWorkspace} className={`mt-8 w-full rounded-full ${featured ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-white text-slate-950 hover:bg-emerald-50'}`} variant={featured ? 'default' : 'outline'}>Choisir {tier.name}<ChevronRight className="ml-1 size-4" /></Button>
+                </article>
+              )
+            })}
           </div>
         </div>
       </section>

@@ -35,6 +35,16 @@ export async function GET(
         },
         reports: {
           orderBy: { createdAt: 'desc' },
+          // Metadata only — the stored body, section payload and protected
+          // outline must never leave the server through the project route.
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            wordCount: true,
+            createdAt: true,
+            updatedAt: true,
+          },
         },
         jobs: {
           orderBy: { createdAt: 'desc' },

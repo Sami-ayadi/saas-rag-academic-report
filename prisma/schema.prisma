@@ -83,6 +83,7 @@ model User {
   sessions       Session[]
   adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
   notifications  Notification[]
+  quotaUsage     EntitlementUsage[]
 }
 
 model Notification {
@@ -279,6 +280,8 @@ model Report {
   title     String
   content   String        @default("")
   sections  String        @default("[]")
+  /// Protected table of contents. Only served to tiers with the tableOfContents entitlement.
+  outline   String        @default("[]")
   status    ProjectStatus @default(DRAFT)
   wordCount Int           @default(0)
   createdAt DateTime      @default(now())
@@ -324,6 +327,34 @@ model Embedding {
 
   @@index([projectId])
   @@index([documentId])
+}
+
+/// Monthly, per-kind quota counters consumed atomically by the entitlement module.
+model EntitlementUsage {
+  id        String   @id @default(cuid())
+  userId    String
+  /// UTC calendar month, formatted as YYYY-MM.
+  period    String
+  /// "generation" or "regeneration".
+  kind      String
+  used      Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, period, kind])
+  @@index([userId, period])
+}
+
+/// Stripe webhook event IDs already processed (idempotency guard): Stripe
+/// redelivers events, and each delivery must be applied at most once.
+model ProcessedWebhookEvent {
+  id         String   @id
+  type       String
+  receivedAt DateTime @default(now())
+
+  @@index([receivedAt])
 }
 
 model ApiUsage {

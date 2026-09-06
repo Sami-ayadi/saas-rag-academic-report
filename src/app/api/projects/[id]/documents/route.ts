@@ -7,10 +7,10 @@ import { z } from 'zod/v4'
 import { db } from '@/lib/db'
 import { getAuthenticatedUser } from '@/lib/auth'
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input'
+import { resolveEntitlements } from '@/lib/entitlements'
 
 export const runtime = 'nodejs'
 
-const MAX_FILE_BYTES = 10_000_000
 const ALLOWED_FILES = {
   '.pdf': ['application/pdf'],
   '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -82,6 +82,19 @@ export async function POST(
     const project = await db.project.findFirst({ where: { id, userId: user.id }, select: { id: true } })
     if (!project) return NextResponse.json({ error: 'Projet non trouvé' }, { status: 404 })
 
+    // Entitlements are resolved from the persisted account, never from the request.
+    const entitlements = resolveEntitlements(user)
+    const documentsInProject = await db.document.count({ where: { projectId: id } })
+    if (documentsInProject >= entitlements.documentsPerProject) {
+      return NextResponse.json(
+        {
+          error: `Votre plan autorise ${entitlements.documentsPerProject} document(s) par projet.`,
+          code: 'DOCUMENT_LIMIT_REACHED',
+        },
+        { status: 402 },
+      )
+    }
+
     const contentType = request.headers.get('content-type') ?? ''
     if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
       return NextResponse.json({ error: 'Envoyez le fichier avec multipart/form-data' }, { status: 415 })
@@ -93,8 +106,14 @@ export async function POST(
     if (!file.name || file.name.length > 180 || /[\\/\0]/.test(file.name)) {
       return NextResponse.json({ error: 'Nom de fichier invalide' }, { status: 400 })
     }
-    if (file.size <= 0 || file.size > MAX_FILE_BYTES) {
-      return NextResponse.json({ error: 'Le fichier doit faire moins de 10 Mo' }, { status: 413 })
+    if (file.size <= 0 || file.size > entitlements.maxUploadBytes) {
+      return NextResponse.json(
+        {
+          error: `Le fichier doit faire moins de ${Math.round(entitlements.maxUploadBytes / (1024 * 1024))} Mo`,
+          code: 'FILE_TOO_LARGE',
+        },
+        { status: 413 },
+      )
     }
 
     const extension = path.extname(file.name).toLowerCase() as keyof typeof ALLOWED_FILES

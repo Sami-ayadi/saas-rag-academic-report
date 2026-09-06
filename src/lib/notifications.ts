@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client'
 
-import { db } from '@/lib/db'
+import { db } from './db'
 
 type DatabaseClient = typeof db | Prisma.TransactionClient
 

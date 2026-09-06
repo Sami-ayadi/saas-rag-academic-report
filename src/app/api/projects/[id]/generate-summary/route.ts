@@ -5,6 +5,8 @@ import { db } from '@/lib/db'
 import { createNotification } from '@/lib/notifications'
 import { getAuthenticatedUser } from '@/lib/auth'
 import { generateSummaryForProject } from '@/lib/report-generation'
+import { resolveEntitlements } from '@/lib/entitlements'
+import { consumeQuota, refundQuota, usagePeriod } from '@/lib/entitlements-server'
 
 export const runtime = 'nodejs'
 export const maxDuration = 180
@@ -26,26 +28,49 @@ export async function POST(
   })
   if (!project) return NextResponse.json({ error: 'Projet non trouvé' }, { status: 404 })
 
-  const sourceChunks = await db.embedding.findMany({
-    where: { projectId: id },
-    orderBy: { chunkIndex: 'asc' },
-    take: 30,
-    select: { content: true },
-  })
+  // Consume the credit before any model call so parallel requests cannot exceed the plan.
+  const entitlements = resolveEntitlements(user)
+  const period = usagePeriod()
+  const quota = await consumeQuota(user.id, 'generation', entitlements.monthlyGenerationCredits, period)
+  if (!quota.allowed) {
+    return NextResponse.json(
+      {
+        error: `Crédits de génération épuisés (${quota.used}/${quota.limit} ce mois-ci).`,
+        code: 'GENERATION_QUOTA_EXCEEDED',
+        quota: { used: quota.used, limit: quota.limit, remaining: 0 },
+      },
+      { status: 402 },
+    )
+  }
 
-  const job = await db.generationJob.create({
-    data: {
-      id: uuidv4(),
-      userId: user.id,
-      projectId: id,
-      type: 'summary',
-      status: 'PROCESSING',
-      progress: 20,
-      progressMessage: 'Génération de la synthèse en cours…',
-      startedAt: new Date(),
-    },
-  })
-  await db.project.update({ where: { id }, data: { status: 'SUMMARIZING' } })
+  let sourceChunks: Array<{ content: string }>
+  let job: { id: string }
+  try {
+    sourceChunks = await db.embedding.findMany({
+      where: { projectId: id },
+      orderBy: { chunkIndex: 'asc' },
+      take: 30,
+      select: { content: true },
+    })
+
+    job = await db.generationJob.create({
+      data: {
+        id: uuidv4(),
+        userId: user.id,
+        projectId: id,
+        type: 'summary',
+        status: 'PROCESSING',
+        progress: 20,
+        progressMessage: 'Génération de la synthèse en cours…',
+        startedAt: new Date(),
+      },
+    })
+    await db.project.update({ where: { id }, data: { status: 'SUMMARIZING' } })
+  } catch (error) {
+    await refundQuota(user.id, 'generation', period)
+    console.error('POST /api/projects/[id]/generate-summary setup error:', error)
+    return NextResponse.json({ error: 'La génération de la synthèse a échoué' }, { status: 500 })
+  }
 
   try {
     const generated = await generateSummaryForProject({
@@ -103,7 +128,6 @@ export async function POST(
           costUsd: 0,
         },
       }),
-      db.user.update({ where: { id: user.id }, data: { creditsUsed: { increment: 1 } } }),
     ])
     await createNotification({ userId: user.id, type: 'GENERATION_COMPLETED', title: 'Synthèse prête', message: `La synthèse de « ${project.title} » est disponible.`, linkView: 'dashboard', metadata: { projectId: id, summaryId: summary.id } })
 
@@ -113,12 +137,14 @@ export async function POST(
       status: 'COMPLETED',
       provider: generated.provider,
       model: generated.model,
-      message: generated.provider === 'openai'
+      message: generated.provider !== 'demo'
         ? 'Synthèse générée par IA'
         : 'Synthèse de démonstration générée localement',
     })
   } catch (error) {
     console.error('POST /api/projects/[id]/generate-summary error:', error)
+    // Refund policy: a generation that stored no artefact returns its credit.
+    await refundQuota(user.id, 'generation', period)
     await db.$transaction([
       db.generationJob.update({
         where: { id: job.id },

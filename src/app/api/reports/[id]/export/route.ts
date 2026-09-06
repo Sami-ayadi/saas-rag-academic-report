@@ -4,6 +4,7 @@ import { z } from 'zod/v4'
 import { db } from '@/lib/db'
 import { getAuthenticatedUser } from '@/lib/auth'
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input'
+import { canExport, resolveEntitlements } from '@/lib/entitlements'
 import { createReportExport } from '@/lib/report-export'
 import type { ReportSection } from '@/lib/types'
 
@@ -29,6 +30,17 @@ export async function POST(
     if (!report) return NextResponse.json({ error: 'Rapport non trouvé' }, { status: 404 })
 
     const { format } = await readJsonBody(request, exportSchema)
+
+    // Export is a paid entitlement. The check happens before any artefact is
+    // produced and never trusts a tier sent by the browser.
+    const entitlements = resolveEntitlements(user)
+    if (!canExport(entitlements, format)) {
+      return NextResponse.json(
+        { error: 'L’export du rapport est réservé aux plans payants.', code: 'EXPORT_NOT_ENTITLED' },
+        { status: 402 },
+      )
+    }
+
     let sections: ReportSection[]
     try {
       const parsed = JSON.parse(report.sections) as ReportSection[]

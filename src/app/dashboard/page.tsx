@@ -1,7 +1,8 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { signIn, useSession } from 'next-auth/react'
+import { getProviders, signIn, useSession } from 'next-auth/react'
 import { GraduationCap, Loader2 } from 'lucide-react'
 
 import { AppHeader } from '@/components/layout/app-header'
@@ -30,6 +31,22 @@ export default function DashboardPage() {
   const { currentView, sidebarOpen, setSidebarOpen } = useAppStore()
   const { status } = useSession()
   const demoMode = process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_AUTH_ALLOW_DEMO === 'true'
+  const [googleReady, setGoogleReady] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    if (demoMode) return
+    let cancelled = false
+    getProviders()
+      .then((providers) => {
+        if (!cancelled) setGoogleReady(Boolean(providers?.google))
+      })
+      .catch(() => {
+        if (!cancelled) setGoogleReady(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [demoMode])
 
   if (!demoMode && status === 'loading') {
     return (
@@ -51,9 +68,23 @@ export default function DashboardPage() {
             <CardDescription>Votre espace conserve vos projets, sources, rapports et exports.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Button className="w-full" onClick={() => signIn('google', { callbackUrl: '/dashboard' })}>
-              Continuer avec Google
-            </Button>
+            {googleReady === false ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold">Connexion Google non configurée</p>
+                <p className="mt-1">
+                  Renseignez <code>GOOGLE_CLIENT_ID</code> et <code>GOOGLE_CLIENT_SECRET</code> dans <code>.env.local</code>,
+                  puis redémarrez le serveur. Voir <code>GOOGLE_AUTH_SETUP.md</code>.
+                </p>
+              </div>
+            ) : (
+              <Button
+                className="w-full"
+                disabled={googleReady === null}
+                onClick={() => signIn('google', { callbackUrl: '/dashboard' })}
+              >
+                {googleReady === null ? 'Chargement de la connexion…' : 'Continuer avec Google'}
+              </Button>
+            )}
             <Button className="w-full" variant="outline" asChild>
               <a href="/">Retour au site</a>
             </Button>

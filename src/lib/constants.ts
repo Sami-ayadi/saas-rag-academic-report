@@ -1,8 +1,4 @@
-export const TIER_LIMITS = {
-  FREE: { projects: 1, reports: 3, documents: 5, maxFileSize: 5 * 1024 * 1024 },
-  STARTER: { projects: 5, reports: 15, documents: 50, maxFileSize: 25 * 1024 * 1024 },
-  PRO: { projects: 999, reports: 999, documents: 999, maxFileSize: 100 * 1024 * 1024 },
-} as const
+import { TIER_LABELS as CANONICAL_TIER_LABELS } from './entitlements'
 
 export const PROJECT_STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Brouillon',
@@ -38,11 +34,8 @@ export const JOB_STATUS_COLORS: Record<string, string> = {
   CANCELLED: 'bg-muted text-muted-foreground',
 }
 
-export const TIER_LABELS: Record<string, string> = {
-  FREE: 'Gratuit',
-  STARTER: 'Starter',
-  PRO: 'Pro',
-}
+// Plan naming lives in the canonical entitlement module; never duplicate it here.
+export const TIER_LABELS: Record<string, string> = CANONICAL_TIER_LABELS
 
 export const TIER_COLORS: Record<string, string> = {
   FREE: 'bg-secondary text-secondary-foreground',

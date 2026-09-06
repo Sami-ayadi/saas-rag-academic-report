@@ -154,6 +154,19 @@ export interface UsageStats {
 
 // ==================== Pricing Types ====================
 
+/**
+ * Human-readable limits rendered from the canonical entitlement module
+ * (`src/lib/entitlements.ts`). Never duplicate these strings elsewhere.
+ */
+export interface PricingTierLimits {
+  projects: string;
+  generations: string;
+  documents: string;
+  fileSize: string;
+  exports: string;
+  preview: string;
+}
+
 export interface PricingTier {
   id: string;
   name: string;
@@ -163,6 +176,7 @@ export interface PricingTier {
   credits: number;
   features: string[];
   recommended?: boolean;
+  limits: PricingTierLimits;
 }
 
 // ==================== Request/Response Body Types ====================

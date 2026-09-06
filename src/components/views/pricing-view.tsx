@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
-import { Check, Star, Sparkles } from 'lucide-react'
+import { Check, FlaskConical, Loader2, RefreshCw, Star, Sparkles } from 'lucide-react'
 
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/accordion'
 
 import { useAppStore } from '@/lib/store'
+import { secureFetch } from '@/lib/secure-fetch'
 import type { PricingTier } from '@/lib/types'
 import { TIER_LABELS, TIER_COLORS } from '@/lib/constants'
 
@@ -56,33 +57,17 @@ const FAQ_ITEMS = [
   },
 ]
 
-// Tier limits for display on pricing cards
-const TIER_DISPLAY_LIMITS: Record<string, { projects: string; reports: string; documents: string; fileSize: string }> = {
-  free: {
-    projects: '1 projet',
-    reports: '3 rapports / mois',
-    documents: '5 documents',
-    fileSize: '5 Mo max / fichier',
-  },
-  starter: {
-    projects: '5 projets',
-    reports: '15 rapports / mois',
-    documents: '50 documents',
-    fileSize: '25 Mo max / fichier',
-  },
-  pro: {
-    projects: 'Projets illimités',
-    reports: '50 rapports / mois',
-    documents: 'Documents illimités',
-    fileSize: '100 Mo max / fichier',
-  },
-}
+// The tier cards render server-defined limits from the canonical entitlement
+// module via `/api/pricing`; no limits are duplicated in the client.
 
 export function PricingView() {
   const navigate = useAppStore((s) => s.navigate)
   const [tiers, setTiers] = useState<PricingTier[]>([])
   const [currentTier, setCurrentTier] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const demoMode = process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_AUTH_ALLOW_DEMO === 'true'
+  const [upgradingId, setUpgradingId] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
   useEffect(() => {
     loadPricing()
@@ -110,8 +95,111 @@ export function PricingView() {
     }
   }
 
-  function handleUpgrade(tierId: string) {
-    toast.info(`Passage au plan ${tierId} — fonctionnalité de démonstration`)
+  async function handleUpgrade(tierId: string) {
+    if (upgradingId) return
+    setUpgradingId(tierId)
+
+    // The free tier is not billable: downgrading is handled by the billing
+    // portal (production) or the local simulator (demo) — never Stripe Checkout.
+    if (tierId === 'free') {
+      if (demoMode) {
+        toast.info('Retour au plan Gratuit via le simulateur local...')
+        await handleSimulate('free')
+      } else {
+        toast.info(
+          'Le plan Gratuit ne nécessite pas de paiement. Utilisez « Gérer mon abonnement » dans les paramètres pour revenir au plan Gratuit.'
+        )
+      }
+      return
+    }
+
+    try {
+      const res = await secureFetch('/api/billing/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tierId }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string }
+
+      if (res.ok && data.url) {
+        window.location.href = data.url
+        return
+      }
+      if (res.status === 503) {
+        toast.error(
+          'Le paiement Stripe n’est pas configuré. Utilisez le bouton « Simuler ce plan » pour tester en local.'
+        )
+        return
+      }
+      if (res.status === 409) {
+        toast.info(data.error ?? 'Vous êtes déjà abonné à ce plan.')
+        return
+      }
+      toast.error(data.error ?? 'Impossible de démarrer le changement de plan.')
+    } catch {
+      toast.error('Erreur réseau lors du changement de plan.')
+    } finally {
+      setUpgradingId(null)
+    }
+  }
+
+  // Local development only: switch plan server-side without payment. The
+  // server refuses this endpoint (404) unless demo auth is enabled.
+  async function handleSimulate(tierId: string) {
+    setUpgradingId(tierId)
+    try {
+      const res = await secureFetch('/api/billing/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tierId }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (res.ok) {
+        toast.success(`Plan de test activé sans paiement : ${tierId.toUpperCase()}`)
+        await loadPricing()
+        return
+      }
+      toast.error(data.error ?? 'Simulation indisponible.')
+    } catch {
+      toast.error('Erreur réseau lors de la simulation.')
+    } finally {
+      setUpgradingId(null)
+    }
+  }
+
+  // Pull-based reconciliation: re-read the authenticated user's Stripe
+  // subscription from the server. This fixes the "payment succeeded but the
+  // plan did not switch" case when a webhook was missed (e.g. stripe listen
+  // was not running at delivery time).
+  async function handleSync() {
+    if (syncing) return
+    setSyncing(true)
+    try {
+      const res = await secureFetch('/api/billing/sync', { method: 'POST' })
+      const data = (await res.json().catch(() => ({}))) as {
+        tier?: string
+        changed?: boolean
+        error?: string
+      }
+      if (res.ok) {
+        if (data.changed) {
+          toast.success(`Abonnement synchronisé : plan ${data.tier ?? ''} activé.`)
+        } else {
+          toast.success(`Abonnement synchronisé — plan actuel : ${data.tier ?? ''}.`)
+        }
+        await loadPricing()
+        return
+      }
+      if (res.status === 503) {
+        toast.error('La facturation Stripe n’est pas configurée sur ce serveur.')
+        return
+      }
+      toast.error(data.error ?? 'Synchronisation impossible.')
+    } catch {
+      toast.error('Erreur réseau lors de la synchronisation.')
+    } finally {
+      setSyncing(false)
+    }
   }
 
   return (
@@ -129,6 +217,22 @@ export function PricingView() {
         <p className="mx-auto mt-2 max-w-2xl text-muted-foreground">
           Choisissez le plan adapté à vos besoins académiques. Commencez gratuitement et évoluez selon vos besoins.
         </p>
+        <div className="mt-4 flex justify-center">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={syncing}
+            onClick={() => void handleSync()}
+            title="Vérifier votre abonnement Stripe et appliquer le plan correspondant"
+          >
+            {syncing ? (
+              <Loader2 className="mr-2 size-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 size-4" />
+            )}
+            Synchroniser mon abonnement
+          </Button>
+        </div>
       </motion.div>
 
       {/* Pricing Cards */}
@@ -156,7 +260,7 @@ export function PricingView() {
           : tiers.map((tier) => {
               const isCurrent = tier.id.toUpperCase() === currentTier
               const isRecommended = tier.recommended === true
-              const limits = TIER_DISPLAY_LIMITS[tier.id]
+              const limits = tier.limits
 
               return (
                 <motion.div key={tier.id} variants={itemVariants}>
@@ -215,7 +319,7 @@ export function PricingView() {
                             </div>
                             <div className="flex items-center gap-2">
                               <Check className="size-3.5 text-primary" />
-                              <span>{limits.reports}</span>
+                              <span>{limits.generations}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <Check className="size-3.5 text-primary" />
@@ -224,6 +328,14 @@ export function PricingView() {
                             <div className="flex items-center gap-2">
                               <Check className="size-3.5 text-primary" />
                               <span>{limits.fileSize}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Check className="size-3.5 text-primary" />
+                              <span>{limits.exports}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Check className="size-3.5 text-primary" />
+                              <span>{limits.preview}</span>
                             </div>
                           </div>
                         </div>
@@ -243,7 +355,7 @@ export function PricingView() {
                       </div>
                     </CardContent>
 
-                    <CardFooter className="pt-4">
+                    <CardFooter className="flex-col gap-2 pt-4">
                       {isCurrent ? (
                         <Button
                           variant="secondary"
@@ -257,9 +369,26 @@ export function PricingView() {
                         <Button
                           className="w-full"
                           variant={isRecommended ? 'default' : 'outline'}
-                          onClick={() => handleUpgrade(tier.id)}
+                          disabled={upgradingId !== null}
+                          onClick={() => void handleUpgrade(tier.id)}
                         >
+                          {upgradingId === tier.id ? (
+                            <Loader2 className="mr-2 size-4 animate-spin" />
+                          ) : (
+                            <Sparkles className="mr-2 size-4" />
+                          )}
                           Passer au plan {tier.name}
+                        </Button>
+                      )}
+                      {demoMode && !isCurrent && (
+                        <Button
+                          variant="ghost"
+                          className="w-full text-xs text-muted-foreground"
+                          disabled={upgradingId !== null}
+                          onClick={() => void handleSimulate(tier.id)}
+                        >
+                          <FlaskConical className="mr-2 size-3.5" />
+                          Simuler ce plan (test local, sans paiement)
                         </Button>
                       )}
                     </CardFooter>

@@ -132,6 +132,13 @@ export function ReportEditorView() {
 
   const [report, setReport] = useState<ReportItem | null>(null)
   const [sections, setSections] = useState<ReportSection[]>([])
+  const [reportAccess, setReportAccess] = useState<{
+    previewApplied?: boolean
+    tableOfContents?: boolean
+    exportFormats?: string[]
+    canEditReport?: boolean
+  } | null>(null)
+  const [fullyVisibleSectionIds, setFullyVisibleSectionIds] = useState<string[]>([])
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [regenerating, setRegenerating] = useState(false)
@@ -148,6 +155,8 @@ export function ReportEditorView() {
       if (res.ok) {
         const data = await res.json()
         setReport(data.report)
+        setReportAccess(data.access ?? null)
+        setFullyVisibleSectionIds(Array.isArray(data.fullyVisibleSectionIds) ? data.fullyVisibleSectionIds : [])
         try {
           const parsed = JSON.parse(data.report.sections)
           setSections(Array.isArray(parsed) ? parsed : [])
@@ -169,6 +178,12 @@ export function ReportEditorView() {
   async function handleRegenerateSection(sectionId?: string) {
     const targetId = sectionId ?? activeSectionId
     if (!targetId || !selectedReportId) return
+    // Preview-limited tiers may only regenerate sections returned in full; the
+    // server enforces this too, but failing fast avoids a wasted request.
+    if (fullyVisibleSectionIds.length > 0 && !fullyVisibleSectionIds.includes(targetId)) {
+      toast.error('Cette section n’est pas disponible dans l’aperçu de votre plan.')
+      return
+    }
     setRegenerating(true)
     setDiffContent(null)
     try {
@@ -267,6 +282,9 @@ export function ReportEditorView() {
     }
   }
 
+  const canUseExportFormat = (format: string) =>
+    !reportAccess || (Array.isArray(reportAccess.exportFormats) && reportAccess.exportFormats.includes(format))
+
   if (loading) {
     return (
       <div className="space-y-4 p-4 md:p-6">
@@ -309,6 +327,11 @@ export function ReportEditorView() {
               <Badge variant="secondary" className={`text-[10px] ${PROJECT_STATUS_COLORS[report.status]}`}>
                 {PROJECT_STATUS_LABELS[report.status]}
               </Badge>
+              {reportAccess?.previewApplied && (
+                <Badge variant="secondary" className="bg-amber-500/15 text-[10px] text-amber-700">
+                  Aperçu gratuit
+                </Badge>
+              )}
             </div>
             <p className="text-xs text-muted-foreground">{report.wordCount} mots · {sections.length} sections</p>
           </div>
@@ -318,7 +341,7 @@ export function ReportEditorView() {
             size="sm"
             variant="outline"
             onClick={() => handleExport('md')}
-            disabled={exporting === 'md'}
+            disabled={exporting === 'md' || !canUseExportFormat('md')}
           >
             {exporting === 'md' ? <Loader2 className="mr-2 size-3 animate-spin" /> : <FileDown className="mr-2 size-3" />}
             MD
@@ -327,7 +350,7 @@ export function ReportEditorView() {
             size="sm"
             variant="outline"
             onClick={() => handleExport('docx')}
-            disabled={exporting === 'docx'}
+            disabled={exporting === 'docx' || !canUseExportFormat('docx')}
           >
             {exporting === 'docx' ? <Loader2 className="mr-2 size-3 animate-spin" /> : <FileDown className="mr-2 size-3" />}
             DOCX
@@ -336,7 +359,7 @@ export function ReportEditorView() {
             size="sm"
             variant="outline"
             onClick={() => handleExport('pdf')}
-            disabled={exporting === 'pdf'}
+            disabled={exporting === 'pdf' || !canUseExportFormat('pdf')}
           >
             {exporting === 'pdf' ? <Loader2 className="mr-2 size-3 animate-spin" /> : <Download className="mr-2 size-3" />}
             PDF

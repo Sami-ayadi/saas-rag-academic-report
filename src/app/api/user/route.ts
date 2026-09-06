@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
+import { resolveEntitlements } from '@/lib/entitlements';
+import { quotaSnapshot, usagePeriod } from '@/lib/entitlements-server';
 
 export const runtime = 'nodejs';
 
@@ -79,9 +81,26 @@ export async function GET() {
       },
     };
 
+    // Canonical entitlement snapshot so dashboards render exactly what the
+    // server enforces, including administrator credit overrides.
+    const entitlements = resolveEntitlements(authenticatedUser);
+    const quota = await quotaSnapshot(user.id, entitlements, usagePeriod());
+
     return NextResponse.json({
       user: { ...user, email: user.email ?? '' },
       usageStats,
+      entitlements: {
+        tier: entitlements.tier,
+        accountTier: entitlements.accountTier,
+        activeProjects: entitlements.activeProjects,
+        documentsPerProject: entitlements.documentsPerProject,
+        maxUploadBytes: entitlements.maxUploadBytes,
+        exportFormats: entitlements.exportFormats,
+        previewPages: entitlements.previewPages,
+        tableOfContents: entitlements.tableOfContents,
+        canEditReport: entitlements.canEditReport,
+      },
+      quota,
     });
   } catch (error) {
     console.error('GET /api/user error:', error);

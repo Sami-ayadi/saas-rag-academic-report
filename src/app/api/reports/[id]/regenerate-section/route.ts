@@ -3,6 +3,9 @@ import { db } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { z } from 'zod/v4';
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input';
+import { applyReportVisibility, resolveEntitlements } from '@/lib/entitlements';
+import { consumeQuota, refundQuota, usagePeriod } from '@/lib/entitlements-server';
+import type { ReportSection } from '@/lib/types';
 
 export const runtime = 'nodejs';
 
@@ -66,13 +69,7 @@ export async function POST(
 
     const { sectionId, instructions } = await readJsonBody(request, regenerateSectionSchema);
 
-    let sections = JSON.parse(report.sections) as Array<{
-      id: string;
-      title: string;
-      content: string;
-      status: string;
-      order: number;
-    }>;
+    let sections = JSON.parse(report.sections) as ReportSection[];
 
     const sectionIndex = sections.findIndex((s) => s.id === sectionId);
     if (sectionIndex === -1) {
@@ -84,6 +81,40 @@ export async function POST(
 
     const targetSection = sections[sectionIndex];
 
+    // Server-side entitlement: consume one regeneration credit before any work.
+    // The browser never sends a tier; the persisted account decides.
+    const entitlements = resolveEntitlements(user);
+    const period = usagePeriod();
+    const quota = await consumeQuota(user.id, 'regeneration', entitlements.monthlyRegenerations, period);
+    if (!quota.allowed) {
+      return NextResponse.json(
+        {
+          error: `Régénérations épuisées (${quota.used}/${quota.limit} ce mois-ci).`,
+          code: 'REGENERATION_QUOTA_EXCEEDED',
+          quota: { used: quota.used, limit: quota.limit, remaining: 0 },
+        },
+        { status: 402 },
+      );
+    }
+
+    // Preview-limited tiers may only regenerate sections that were returned in
+    // full. Writing a truncated section back would otherwise destroy the stored
+    // report, and unlocking titles would leak the protected outline.
+    const visibleBefore = applyReportVisibility(
+      { sections, content: report.content },
+      entitlements,
+    );
+    if (!visibleBefore.fullyVisibleSectionIds.includes(sectionId)) {
+      await refundQuota(user.id, 'regeneration', period);
+      return NextResponse.json(
+        {
+          error: 'Cette section n’est pas disponible dans l’aperçu de votre plan.',
+          code: 'SECTION_NOT_AVAILABLE_IN_PREVIEW',
+        },
+        { status: 402 },
+      );
+    }
+
     // Mark section as generating
     sections[sectionIndex] = {
       ...targetSection,
@@ -94,53 +125,78 @@ export async function POST(
       data: { sections: JSON.stringify(sections) },
     });
 
-    // Simulate AI regeneration with a delay (1.5-2.5s)
-    await new Promise((resolve) => setTimeout(resolve, 1500 + Math.random() * 1000));
+    try {
+      // Simulate AI regeneration with a delay (1.5-2.5s)
+      await new Promise((resolve) => setTimeout(resolve, 1500 + Math.random() * 1000));
 
-    // Generate truly new content based on the section type
-    const templateFn = pickTemplate(sectionId);
-    const regeneratedContent = templateFn(targetSection.title, instructions);
+      // Generate truly new content based on the section type
+      const templateFn = pickTemplate(sectionId);
+      const regeneratedContent = templateFn(targetSection.title, instructions);
 
-    // Update section
-    sections[sectionIndex] = {
-      ...targetSection,
-      content: regeneratedContent,
-      status: 'completed',
-    };
+      // Update section
+      sections[sectionIndex] = {
+        ...targetSection,
+        content: regeneratedContent,
+        status: 'completed',
+      };
 
-    // Rebuild full content
-    const newFullContent = sections
-      .map((s) => `# ${s.title}\n\n${s.content}`)
-      .join('\n\n---\n\n');
-    const wordCount = newFullContent.split(/\s+/).filter(Boolean).length;
+      // Rebuild full content
+      const newFullContent = sections
+        .map((s) => `# ${s.title}\n\n${s.content}`)
+        .join('\n\n---\n\n');
+      const wordCount = newFullContent.split(/\s+/).filter(Boolean).length;
 
-    const updatedReport = await db.report.update({
-      where: { id },
-      data: {
-        sections: JSON.stringify(sections),
-        content: newFullContent,
-        wordCount,
-      },
-    });
+      const updatedReport = await db.report.update({
+        where: { id },
+        data: {
+          sections: JSON.stringify(sections),
+          content: newFullContent,
+          wordCount,
+        },
+      });
 
-    // Record API usage
-    await db.apiUsage.create({
-      data: {
-        userId: report.project.userId,
-        projectId: report.projectId,
-        type: 'section_regeneration',
-        inputTokens: 4000 + Math.floor(Math.random() * 1000),
-        outputTokens: 1500 + Math.floor(Math.random() * 500),
-        costUsd: 0.02 + Math.random() * 0.02,
-      },
-    });
+      // Record API usage
+      await db.apiUsage.create({
+        data: {
+          userId: report.project.userId,
+          projectId: report.projectId,
+          type: 'section_regeneration',
+          inputTokens: 4000 + Math.floor(Math.random() * 1000),
+          outputTokens: 1500 + Math.floor(Math.random() * 500),
+          costUsd: 0.02 + Math.random() * 0.02,
+        },
+      });
 
-    return NextResponse.json({
-      section: sections[sectionIndex],
-      originalContent: targetSection.content,
-      report: updatedReport,
-      message: 'Section régénérée avec succès',
-    });
+      // The response also passes through visibility: a preview-limited tier
+      // never receives locked section titles or the full body, even after a
+      // mutation succeeds.
+      const visibleAfter = applyReportVisibility(
+        { sections, content: newFullContent },
+        entitlements,
+      );
+
+      return NextResponse.json({
+        section: sections[sectionIndex],
+        originalContent: targetSection.content,
+        report: {
+          ...updatedReport,
+          content: visibleAfter.content,
+          sections: JSON.stringify(visibleAfter.sections),
+          wordCount: visibleAfter.content.split(/\s+/).filter(Boolean).length,
+        },
+        access: visibleAfter.access,
+        message: 'Section régénérée avec succès',
+      });
+    } catch (error) {
+      // Refund policy: a regeneration that did not persist its artefact returns
+      // its credit, and the section status is restored.
+      await refundQuota(user.id, 'regeneration', period);
+      sections[sectionIndex] = { ...targetSection };
+      await db.report
+        .update({ where: { id }, data: { sections: JSON.stringify(sections) } })
+        .catch(() => undefined);
+      throw error;
+    }
   } catch (error) {
     console.error('POST /api/reports/[id]/regenerate-section error:', error);
     const requestError = apiRequestErrorResponse(error);

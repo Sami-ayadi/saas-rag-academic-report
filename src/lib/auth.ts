@@ -22,17 +22,25 @@ function configuredPlatformOwnerEmails() {
   )
 }
 
+const googleClientId = process.env.GOOGLE_CLIENT_ID
+const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET
+
+/**
+ * True only when both Google OAuth credentials are present. When false, the
+ * Google provider is not registered at all, so the client never shows a
+ * sign-in button that would fail with NextAuth error `OAuthSignin`
+ * ("Try signing in with a different account").
+ */
+export const isGoogleAuthConfigured = Boolean(googleClientId && googleClientSecret)
+
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(db),
   session: {
     strategy: 'database',
   },
-  providers: [
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID ?? '',
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-    }),
-  ],
+  providers: isGoogleAuthConfigured && googleClientId && googleClientSecret
+    ? [GoogleProvider({ clientId: googleClientId, clientSecret: googleClientSecret })]
+    : [],
   callbacks: {
     async signIn({ user }) {
       if (!user.email) return false
@@ -74,6 +82,8 @@ export interface AuthenticatedUser {
   tier: 'FREE' | 'STARTER' | 'PRO'
   role: 'USER' | 'ADMIN'
   isActive: boolean
+  /** Administrator-managed override of the tier's monthly generation credits. */
+  creditsLimit: number
 }
 
 export async function ensureDemoUsers() {
@@ -161,7 +171,7 @@ export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> 
       : DEMO_STUDENT_ID
     return db.user.findUnique({
       where: { id: demoUserId },
-      select: { id: true, tier: true, role: true, isActive: true },
+      select: { id: true, tier: true, role: true, isActive: true, creditsLimit: true },
     })
   }
 
@@ -169,7 +179,7 @@ export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> 
   if (session?.user?.id) {
     const user = await db.user.findUnique({
       where: { id: session.user.id },
-      select: { id: true, tier: true, role: true, isActive: true },
+      select: { id: true, tier: true, role: true, isActive: true, creditsLimit: true },
     })
     if (user?.isActive) {
       const cookieStore = await cookies()

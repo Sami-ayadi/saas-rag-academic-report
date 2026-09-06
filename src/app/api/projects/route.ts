@@ -4,6 +4,8 @@ import { z } from 'zod/v4';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input';
 import { notifyAdministrators } from '@/lib/notifications';
+import { resolveEntitlements } from '@/lib/entitlements';
+import { isSerializationFailure, QuotaExceededError, withProjectSlot } from '@/lib/entitlements-server';
 
 export const runtime = 'nodejs';
 
@@ -80,8 +82,9 @@ export async function POST(request: NextRequest) {
     }
 
     const validated = await readJsonBody(request, createProjectSchema);
+    const entitlements = resolveEntitlements(user);
 
-    const project = await db.$transaction(async (transaction) => {
+    const project = await withProjectSlot(user.id, entitlements.activeProjects, async (transaction) => {
       const created = await transaction.project.create({
         data: {
           title: validated.title,
@@ -106,6 +109,15 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ project }, { status: 201 });
   } catch (error) {
+    if (error instanceof QuotaExceededError) {
+      return NextResponse.json({ error: error.message, code: 'PROJECT_LIMIT_REACHED' }, { status: 402 });
+    }
+    if (isSerializationFailure(error)) {
+      return NextResponse.json(
+        { error: 'Création concurrente détectée, réessayez.', code: 'CONCURRENT_CREATE' },
+        { status: 409 },
+      );
+    }
     console.error('POST /api/projects error:', error);
     const requestError = apiRequestErrorResponse(error);
     if (requestError) return requestError;
