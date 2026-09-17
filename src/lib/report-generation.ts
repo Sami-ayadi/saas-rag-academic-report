@@ -365,13 +365,13 @@ const outlineSchema = z.object({
         id: z.string().min(1).max(80),
         title: z.string().min(1).max(200),
         order: z.number().int().min(0).max(30),
-        estimatedWords: z.number().int().min(400).max(8_000),
+        estimatedWords: z.number().int().min(250).max(8_000),
         keyPoints: z.array(z.string().min(3).max(300)).min(0).max(8),
       }),
     )
     .min(10)
     .max(25),
-  totalEstimatedWords: z.number().int().min(8_000).max(120_000),
+  totalEstimatedWords: z.number().int().min(2_000).max(120_000),
   totalEstimatedPages: z.number().int().min(10).max(120),
 }).strict()
 
@@ -390,7 +390,7 @@ const sectionOnlySchema = z.object({
     .max(1),
 }).strict()
 
-const OUTLINE_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"id":"introduction","title":"Introduction","order":0,"estimatedWords":1800,"keyPoints":["Contexte du stage","Problématique","Objectifs","Plan du rapport"]}],"totalEstimatedWords":25000,"totalEstimatedPages":50}. Rules: 14 to 22 sections for a ~50-page report; each section 1500-3500 words; order is consecutive starting at 0; keyPoints 3-6 items.'
+const OUTLINE_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"id":"introduction","title":"Introduction","order":0,"estimatedWords":900,"keyPoints":["Contexte du stage","Problématique","Objectifs","Plan du rapport"]}],"totalEstimatedWords":14000,"totalEstimatedPages":50}. Rules: 10 to 25 sections, approximately 280 words per page; section lengths should sum to the requested word target; order is consecutive starting at 0; keyPoints 3-6 items.'
 
 /**
  * Canonical final-year internship report (PFE) structure. The outline LLM call
@@ -399,7 +399,7 @@ const OUTLINE_JSON_CONTRACT = 'Respond with a single JSON object and nothing els
  */
 const PFE_STRUCTURE_GUIDE = `Follow the canonical structure of a final-year academic internship report (PFE):
 1. "Introduction générale" (context of the internship, company, problem statement, objectives, methodology, announce the plan).
-2. Numbered chapters adapted to the project subject, for example: "Chapitre 1 : Présentation de l'organisme d'accueil", "Chapitre 2 : Étude de l'existant et cadrage du projet", "Chapitre 3 : Analyse et spécification des besoins", "Chapitre 4 : Conception de la solution", "Chapitre 5 : Réalisation et mise en œuvre", "Chapitre 6 : Tests, déploiement et validation". Each chapter must be split into 2-4 outline entries (one per major subsection) so entries stay between 1500 and 3500 words. In keyPoints, mention the diagrams/methods expected there (organigramme, fiche process, diagramme de cas d'utilisation UML, diagramme de classes, architecture technique, technologies utilisées, description des interfaces, plan de tests...).
+2. Numbered chapters adapted to the project subject, for example: "Chapitre 1 : Présentation de l'organisme d'accueil", "Chapitre 2 : Étude de l'existant et cadrage du projet", "Chapitre 3 : Analyse et spécification des besoins", "Chapitre 4 : Conception de la solution", "Chapitre 5 : Réalisation et mise en œuvre", "Chapitre 6 : Tests, déploiement et validation". Split each chapter into 2-4 outline entries (one per major subsection), with lengths scaled to the requested report size. In keyPoints, mention the diagrams/methods expected there (organigramme, fiche process, diagramme de cas d'utilisation UML, diagramme de classes, architecture technique, technologies utilisées, description des interfaces, plan de tests...).
 3. "Conclusion générale et perspectives" (summary of achievements, acquired skills, future improvements).
 4. "Bibliographie et webographie" and finally "Annexes" (glossary, extra diagrams, code extracts, user guides).
 Adapt all titles to the actual project subject and field. Total must match the requested page count.`
@@ -413,7 +413,7 @@ const SECTION_STYLE_GUIDE = `Style requirements (mandatory):
 - Formal academic French register (or English if the project language is English).`
 
 
-const SECTION_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"id":"introduction","title":"Introduction","content":"Markdown body of 1500-3500 words","status":"completed","order":0}]}. Rules: exactly one section; content is substantive academic Markdown prose.'
+const SECTION_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"id":"introduction","title":"Introduction","content":"Substantive Markdown body at the requested length","status":"completed","order":0}]}. Rules: exactly one section; content is substantive academic Markdown prose.'
 
 /**
  * PASS 1 — Generate a detailed outline for a long (~50-page) report.
@@ -424,7 +424,8 @@ export async function generateReportOutline(
   targetPages = 50,
 ): Promise<ReportOutline> {
   const system = `You are an expert academic report planner. Build a comprehensive ${targetPages}-page internship report outline in ${project.language === 'fr' ? 'French' : 'English'}. ${TRUST_BOUNDARY}`
-  const prompt = `Create a detailed outline for a ~${targetPages}-page academic internship report (PFE). 14-22 sections, 1500-3500 words each.
+  const suggestedSections = Math.min(22, Math.max(10, Math.round(targetPages / 3)))
+  const prompt = `Create a detailed outline for a ~${targetPages}-page academic internship report (PFE). Around ${suggestedSections} sections and approximately ${targetPages * 280} total words, distributed across sections.
 ${PFE_STRUCTURE_GUIDE}
 
 ${OUTLINE_JSON_CONTRACT}
@@ -451,12 +452,12 @@ ${summary.slice(0, 20_000)}`
             id: { type: 'string', minLength: 1, maxLength: 80 },
             title: { type: 'string', minLength: 1, maxLength: 200 },
             order: { type: 'integer', minimum: 0, maximum: 30 },
-            estimatedWords: { type: 'integer', minimum: 400, maximum: 8000 },
+            estimatedWords: { type: 'integer', minimum: 250, maximum: 8000 },
             keyPoints: { type: 'array', minItems: 0, maxItems: 8, items: { type: 'string', minLength: 3, maxLength: 300 } },
           },
         },
       },
-      totalEstimatedWords: { type: 'integer', minimum: 8000, maximum: 120000 },
+      totalEstimatedWords: { type: 'integer', minimum: 2000, maximum: 120000 },
       totalEstimatedPages: { type: 'integer', minimum: 10, maximum: 120 },
     },
   }
@@ -485,7 +486,13 @@ ${summary.slice(0, 20_000)}`
   if (!outline) {
     throw new Error(`The report outline could not be generated after 3 attempts (${lastOutlineError instanceof Error ? lastOutlineError.message.slice(0, 200) : 'unknown error'})`)
   }
-  return { ...outline, sections: dedupeIds(outline.sections.sort((a, b) => a.order - b.order)) }
+  const targetWords = targetPages * 280
+  const estimatedTotal = outline.sections.reduce((sum, section) => sum + section.estimatedWords, 0)
+  const sections = dedupeIds(outline.sections.sort((a, b) => a.order - b.order)).map((section) => ({
+    ...section,
+    estimatedWords: Math.max(250, Math.min(1_600, Math.round(section.estimatedWords * targetWords / estimatedTotal))),
+  }))
+  return { sections, totalEstimatedWords: targetWords, totalEstimatedPages: targetPages }
 }
 
 /**
@@ -501,12 +508,13 @@ async function generateLongSection(
 ): Promise<{ section: ReportSection; tokens: { input: number; output: number } }> {
   const target = outline.sections[index]
   const remaining = outline.sections.length - index - 1
+  const minWords = Math.max(200, Math.round(target.estimatedWords * 0.82))
   const system = `You are an expert academic writer. Write section ${index + 1} of ${outline.sections.length} ("${target.title}") of a ${outline.totalEstimatedPages}-page internship report in ${project.language === 'fr' ? 'French' : 'English'}. ${TRUST_BOUNDARY}`
   const prompt = `Write ONLY this section as valid JSON ("sections" array with exactly one entry):
 - id: ${target.id}
 - title: ${target.title}
 - order: ${target.order}
-- target length: ~${target.estimatedWords} words (write at least ${Math.max(1200, Math.round(target.estimatedWords * 0.75))} words)
+- target length: ~${target.estimatedWords} words (write at least ${minWords} words)
 - mandatory points: ${target.keyPoints.join('; ')}
 
 ${SECTION_STYLE_GUIDE}
@@ -551,34 +559,50 @@ ${summary.slice(0, 20_000)}`
   }
 
   let parsed: z.infer<typeof sectionOnlySchema> | undefined
+  let draft: z.infer<typeof sectionOnlySchema> | undefined
   let lastSectionError: unknown
   let sectionTokens = { input: 0, output: 0 }
   for (let attempt = 1; attempt <= 3 && !parsed; attempt++) {
-    const attemptPrompt = attempt === 1
-      ? prompt
-      : `${prompt}\n\nCRITICAL: your previous response was not parseable JSON (${lastSectionError instanceof Error ? lastSectionError.message.slice(0, 200) : 'unknown error'}). Output the COMPLETE JSON object only - exactly one section entry with the FULL ${target.estimatedWords}-word prose, no text outside JSON, no truncation; close every bracket and every string.`
+    const continuing = Boolean(draft)
+    const neededWords = draft ? Math.max(120, Math.min(500, target.estimatedWords - draft.sections[0].content.split(/\s+/).filter(Boolean).length)) : 0
+    const attemptPrompt = continuing
+      ? `Continue the existing academic report section with about ${neededWords} NEW words of substantive Markdown prose in ${project.language === 'fr' ? 'French' : 'English'}. Return only the additional paragraphs: no title, no JSON, no code fence, no repeated sentences. Develop the section's stated points using only the provided facts; do not invent citations, figures, experiments or results.\n\nSECTION_TITLE: ${target.title}\nKEY_POINTS_JSON: ${JSON.stringify(target.keyPoints)}\nPROJECT_CONTEXT_JSON: ${safeProjectContext(project)}\nUNTRUSTED_EXISTING_SECTION_TAIL:\n${draft!.sections[0].content.slice(-4_000)}`
+      : attempt === 1
+        ? prompt
+        : `${prompt}\n\nCORRECTION: the previous response was invalid (${lastSectionError instanceof Error ? lastSectionError.message.slice(0, 200) : 'unknown error'}). Output one complete JSON object with exactly one section and substantive prose; close every bracket and string.`
     let completion: LlmCompletion
     try {
-      completion = await callLLM({ system, prompt: attemptPrompt, maxOutputTokens: 14_000, jsonSchema: sectionJsonSchema })
+      completion = await callLLM({
+        system,
+        prompt: attemptPrompt,
+        maxOutputTokens: continuing ? 2_000 : 8_000,
+        ...(continuing ? {} : { jsonSchema: sectionJsonSchema }),
+      })
     } catch (error) {
       lastSectionError = error
       console.error(`[report-generation] section "${target.title}" attempt ${attempt}/3 call failed: ${error instanceof Error ? error.message : error}`)
       continue
     }
-    sectionTokens = { input: completion.inputTokens, output: completion.outputTokens }
+    sectionTokens.input += completion.inputTokens
+    sectionTokens.output += completion.outputTokens
     try {
-      const candidate = sectionOnlySchema.parse(parseJsonPayload(completion.text))
-      // Models systematically under-deliver requested lengths; re-request
-      // any section that lands clearly below the outline target.
-      const minWords = 900
-      const candidateWords = candidate.sections[0].content.split(/\s+/).filter(Boolean).length
+      if (draft) {
+        const addition = completion.text.trim().replace(/^```(?:markdown)?\s*/i, '').replace(/```\s*$/, '').trim()
+        if (addition.length < 100 || addition.startsWith('{') || draft.sections[0].content.includes(addition.slice(0, 120))) {
+          throw new Error('The continuation was empty or repeated existing text')
+        }
+        draft.sections[0].content += `\n\n${addition}`
+      } else {
+        draft = sectionOnlySchema.parse(parseJsonPayload(completion.text))
+      }
+      const candidateWords = draft.sections[0].content.split(/\s+/).filter(Boolean).length
       if (candidateWords < minWords) {
         throw new Error(`too short: ${candidateWords} words written, expected at least ${minWords}`)
       }
-      parsed = candidate
+      parsed = draft
     } catch (error) {
       lastSectionError = error
-      console.error(`[report-generation] section "${target.title}" attempt ${attempt}/3 rejected: ${error instanceof Error ? error.message.slice(0, 300) : error} | raw tail: ${completion.text.slice(-200).replace(/\n/g, ' ')}`)
+      console.error(`[report-generation] section "${target.title}" attempt ${attempt}/3 rejected: ${error instanceof Error ? error.message.slice(0, 300) : error}`)
     }
   }
   if (!parsed) {

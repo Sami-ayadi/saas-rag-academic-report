@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createReportExport } from './report-export'
-import { generateReportForProject, generateSummaryForProject, isLlmConfigured, reviseReportSection } from './report-generation'
+import { generateLongReportForProject, generateReportForProject, generateSummaryForProject, isLlmConfigured, reviseReportSection } from './report-generation'
 import type { ReportSection } from './types'
 
 const originalEnv = {
@@ -190,5 +190,54 @@ describe('report generation and exports', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
     expect(body.messages[0].content).toContain('untrusted data')
     expect(body.messages[1].content).toContain('UNTRUSTED_REVISION_INPUT_JSON')
+  })
+
+  it('extends a short long-report section and accounts for the extra API call', async () => {
+    process.env.LLM_API_KEY = 'test-key'
+    process.env.LLM_BASE_URL = 'https://llm.example.test/v1'
+    process.env.LLM_REPORT_MODEL = 'openrouter/free'
+    const outline = {
+      sections: Array.from({ length: 10 }, (_, order) => ({
+        id: `part-${order}`,
+        title: `Partie ${order}`,
+        order,
+        estimatedWords: 1400,
+        keyPoints: ['Contexte du projet', 'Analyse des résultats', 'Limites de la méthode'],
+      })),
+      totalEstimatedWords: 14000,
+      totalEstimatedPages: 50,
+    }
+    const firstDraft = Array.from({ length: 900 }, (_, i) => `initial${i}`).join(' ')
+    const continuation = Array.from({ length: 300 }, (_, i) => `suite${i}`).join(' ')
+    const fullSection = Array.from({ length: 1200 }, (_, i) => `section${i}`).join(' ')
+    let call = 0
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+      const current = call++
+      if (current === 0) return chatCompletion(JSON.stringify(outline))
+      if (current === 1) return chatCompletion(JSON.stringify({
+        sections: [{ id: 'part-0', title: 'Partie 0', content: firstDraft, status: 'completed', order: 0 }],
+      }))
+      if (current === 2) return chatCompletion(continuation)
+      const order = current - 2
+      return chatCompletion(JSON.stringify({
+        sections: [{ id: `part-${order}`, title: `Partie ${order}`, content: fullSection, status: 'completed', order }],
+      }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const progress: number[] = []
+    const result = await generateLongReportForProject(project, project.brief ?? '', 50, ({ current }) => {
+      progress.push(current)
+    })
+
+    expect(result.content).toHaveLength(10)
+    expect(result.content[0].content.split(/\s+/)).toHaveLength(1200)
+    expect(result.content[0].content).toContain('suite299')
+    expect(progress).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(fetchMock).toHaveBeenCalledTimes(12)
+    expect(result.inputTokens).toBe(11 * 111)
+    expect(result.outputTokens).toBe(11 * 222)
+    const continuationBody = JSON.parse(fetchMock.mock.calls[2][1]?.body as string)
+    expect(continuationBody.response_format).toBeUndefined()
   })
 })
