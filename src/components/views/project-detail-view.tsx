@@ -119,6 +119,9 @@ export function ProjectDetailView() {
           const data = await res.json()
           setJobProgress({ progress: data.job.progress, message: data.job.progressMessage, status: data.job.status })
           if (data.job.status === 'COMPLETED' || data.job.status === 'FAILED') {
+            if (data.job.status === 'FAILED') {
+              toast.error(data.job.progressMessage || 'La génération a échoué. Réessayez.')
+            }
             setActiveJobId(null)
             setJobProgress(null)
             setGeneratingSummary(false)
@@ -143,7 +146,8 @@ export function ProjectDetailView() {
         setActiveJobId(data.jobId)
         toast.success('Génération du résumé lancée')
       } else {
-        toast.error('Erreur lors de la génération')
+        const failure = await res.json().catch(() => ({}))
+        toast.error(failure.error || 'Erreur lors de la génération')
         setGeneratingSummary(false)
       }
     } catch {
@@ -162,7 +166,8 @@ export function ProjectDetailView() {
         setActiveJobId(data.jobId)
         toast.success('Génération du rapport lancée')
       } else {
-        toast.error('Erreur lors de la génération')
+        const failure = await res.json().catch(() => ({}))
+        toast.error(failure.error || 'Erreur lors de la génération')
         setGeneratingReport(false)
       }
     } catch {

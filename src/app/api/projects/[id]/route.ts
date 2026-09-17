@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { z } from 'zod/v4';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input';
+import { resolveEntitlements } from '@/lib/entitlements';
 
 export const runtime = 'nodejs';
 
@@ -29,6 +30,17 @@ export async function GET(
       include: {
         documents: {
           orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            projectId: true,
+            originalName: true,
+            mimeType: true,
+            size: true,
+            status: true,
+            chunkCount: true,
+            createdAt: true,
+            updatedAt: true,
+          },
         },
         summaries: {
           orderBy: { createdAt: 'desc' },
@@ -59,7 +71,18 @@ export async function GET(
       );
     }
 
-    return NextResponse.json({ project });
+    const canViewOutline = resolveEntitlements(user).tableOfContents;
+    return NextResponse.json({ project: {
+      ...project,
+      jobs: project.jobs.map((job) => ({
+        ...job,
+        progressMessage: !canViewOutline && job.type === 'report'
+          ? job.status === 'FAILED' ? 'Échec de la génération du rapport' : job.status === 'COMPLETED' ? 'Rapport généré' : 'Rédaction du rapport en cours…'
+          : job.progressMessage,
+        outputData: canViewOutline ? job.outputData : null,
+        errorMessage: null,
+      })),
+    } });
   } catch (error) {
     console.error('GET /api/projects/[id] error:', error);
     return NextResponse.json(

@@ -18,8 +18,8 @@ import {
 
 import { useAppStore } from '@/lib/store'
 import { secureFetch } from '@/lib/secure-fetch'
-import type { PricingTier } from '@/lib/types'
 import { TIER_LABELS, TIER_COLORS } from '@/lib/constants'
+import type { PricingTier } from '@/lib/types'
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -65,12 +65,31 @@ export function PricingView() {
   const [tiers, setTiers] = useState<PricingTier[]>([])
   const [currentTier, setCurrentTier] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [autoSyncing, setAutoSyncing] = useState(false)
   const demoMode = process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_AUTH_ALLOW_DEMO === 'true'
   const [upgradingId, setUpgradingId] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
 
   useEffect(() => {
     loadPricing()
+  }, [])
+
+  // Automatic sync when returning from Stripe Checkout
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search)
+    const billingStatus = urlParams.get('billing')
+
+    if (billingStatus === 'success') {
+      setAutoSyncing(true)
+      toast.info('Paiement en cours de confirmation...')
+      syncSubscription().then(() => {
+        window.history.replaceState({}, '', window.location.pathname)
+        setAutoSyncing(false)
+      })
+    } else if (billingStatus === 'cancelled') {
+      toast.info('Paiement annulé.')
+      window.history.replaceState({}, '', window.location.pathname)
+    }
   }, [])
 
   async function loadPricing() {
@@ -171,7 +190,7 @@ export function PricingView() {
   // subscription from the server. This fixes the "payment succeeded but the
   // plan did not switch" case when a webhook was missed (e.g. stripe listen
   // was not running at delivery time).
-  async function handleSync() {
+  async function syncSubscription(): Promise<void> {
     if (syncing) return
     setSyncing(true)
     try {
@@ -200,6 +219,28 @@ export function PricingView() {
     } finally {
       setSyncing(false)
     }
+  }
+
+  function handleSync() {
+    void syncSubscription()
+  }
+
+  if (autoSyncing) {
+    return (
+      <motion.div
+        className="flex min-h-[400px] flex-col items-center justify-center gap-4 p-8"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+      >
+        <Loader2 className="size-10 animate-spin text-primary" />
+        <div className="text-center">
+          <h2 className="text-xl font-semibold">Confirmation du paiement...</h2>
+          <p className="mt-2 text-muted-foreground">
+            Nous synchronisons votre abonnement. Cela ne prendra qu&apos;un instant.
+          </p>
+        </div>
+      </motion.div>
+    )
   }
 
   return (

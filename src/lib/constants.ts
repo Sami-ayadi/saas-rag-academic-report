@@ -1,4 +1,4 @@
-import { TIER_LABELS as CANONICAL_TIER_LABELS } from './entitlements'
+import { TIER_LABELS as CANONICAL_TIER_LABELS } from './billing'
 
 export const PROJECT_STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Brouillon',
@@ -34,7 +34,14 @@ export const JOB_STATUS_COLORS: Record<string, string> = {
   CANCELLED: 'bg-muted text-muted-foreground',
 }
 
-// Plan naming lives in the canonical entitlement module; never duplicate it here.
+export const DOCUMENT_TYPE_LABELS: Record<string, string> = {
+  PDF: 'Document PDF',
+  DOCX: 'Document Word',
+  TXT: 'Fichier texte',
+  MARKDOWN: 'Fichier Markdown',
+}
+
+// Plan naming lives in the canonical billing module; never duplicate it here.
 export const TIER_LABELS: Record<string, string> = CANONICAL_TIER_LABELS
 
 export const TIER_COLORS: Record<string, string> = {
@@ -42,6 +49,29 @@ export const TIER_COLORS: Record<string, string> = {
   STARTER: 'bg-primary/15 text-primary',
   PRO: 'bg-accent/15 text-accent-foreground',
 }
+
+export const EXPORT_FORMAT_LABELS: Record<string, string> = {
+  markdown: 'Markdown',
+  pdf: 'PDF',
+  docx: 'Word (DOCX)',
+}
+
+export const GENDER_LABELS: Record<string, string> = {
+  male: 'Homme',
+  female: 'Femme',
+  other: 'Autre',
+  prefer_not_to_say: 'Préfère ne pas dire',
+}
+
+export const NOTIFICATION_TYPES = {
+  BILLING_PLAN_UPDATED: 'BILLING_PLAN_UPDATED',
+  GENERATION_COMPLETE: 'GENERATION_COMPLETE',
+  GENERATION_FAILED: 'GENERATION_FAILED',
+  QUOTA_WARNING: 'QUOTA_WARNING',
+  PROJECT_SHARED: 'PROJECT_SHARED',
+} as const
+
+export type NotificationType = (typeof NOTIFICATION_TYPES)[keyof typeof NOTIFICATION_TYPES]
 
 export const ACADEMIC_LEVELS = [
   'Licence',

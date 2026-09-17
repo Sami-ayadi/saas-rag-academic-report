@@ -50,6 +50,21 @@ const itemVariants = {
   show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: 'easeOut' as const } },
 }
 
+/**
+ * LLM-generated section ids can repeat (e.g. two "chapitre9"); React keys and
+ * DOM scroll anchors must be unique, so duplicates get a -2/-3 suffix. Kept in
+ * sync with the same dedupe applied server-side in report-generation.ts.
+ */
+function withUniqueSectionIds(sections: ReportSection[]): ReportSection[] {
+  const seen = new Map<string, number>()
+  return sections.map((section) => {
+    const base = section.id || 'section'
+    const count = seen.get(base) ?? 0
+    seen.set(base, count + 1)
+    return count === 0 ? section : { ...section, id: `${base}-${count + 1}` }
+  })
+}
+
 function SectionCard({
   section,
   isActive,
@@ -137,6 +152,7 @@ export function ReportEditorView() {
     tableOfContents?: boolean
     exportFormats?: string[]
     canEditReport?: boolean
+    canRegenerate?: boolean
   } | null>(null)
   const [fullyVisibleSectionIds, setFullyVisibleSectionIds] = useState<string[]>([])
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
@@ -145,6 +161,7 @@ export function ReportEditorView() {
   const [instructions, setInstructions] = useState('')
   const [diffContent, setDiffContent] = useState<{ original: string; newContent: string } | null>(null)
   const [exporting, setExporting] = useState<string | null>(null)
+  const [editingContent, setEditingContent] = useState<string | null>(null)
 
   // Load report
   const loadReport = useCallback(async () => {
@@ -159,7 +176,7 @@ export function ReportEditorView() {
         setFullyVisibleSectionIds(Array.isArray(data.fullyVisibleSectionIds) ? data.fullyVisibleSectionIds : [])
         try {
           const parsed = JSON.parse(data.report.sections)
-          setSections(Array.isArray(parsed) ? parsed : [])
+          setSections(Array.isArray(parsed) ? withUniqueSectionIds(parsed) : [])
         } catch {
           setSections([])
         }
@@ -174,6 +191,30 @@ export function ReportEditorView() {
   useEffect(() => { loadReport() }, [loadReport])
 
   const activeSection = sections.find((s) => s.id === activeSectionId)
+  useEffect(() => { setEditingContent(null) }, [activeSectionId])
+
+  async function saveSectionEdit() {
+    if (!selectedReportId || !activeSectionId || editingContent === null) return
+    try {
+      const res = await secureFetch(`/api/reports/${selectedReportId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sectionId: activeSectionId, sectionContent: editingContent }),
+      })
+      if (!res.ok) {
+        const failure = await res.json().catch(() => ({}))
+        toast.error(failure.error || 'Impossible de sauvegarder la section')
+        return
+      }
+      setSections((previous) => previous.map((section) => section.id === activeSectionId
+        ? { ...section, content: editingContent, status: 'completed' as const }
+        : section))
+      setEditingContent(null)
+      toast.success('Section sauvegardée')
+    } catch {
+      toast.error('Erreur réseau pendant la sauvegarde')
+    }
+  }
 
   async function handleRegenerateSection(sectionId?: string) {
     const targetId = sectionId ?? activeSectionId
@@ -271,9 +312,10 @@ export function ReportEditorView() {
         link.click()
         link.remove()
         URL.revokeObjectURL(downloadUrl)
-        toast.success(`Export ${format.toUpperCase()} prêt (démonstration)`)
+        toast.success(`Export ${format.toUpperCase()} prêt`)
       } else {
-        toast.error('Erreur lors de l\'export')
+        const failure = await res.json().catch(() => ({}))
+        toast.error(failure.error || 'Erreur lors de l\'export')
       }
     } catch {
       toast.error('Erreur réseau')
@@ -586,6 +628,20 @@ export function ReportEditorView() {
                           />
                         </div>
 
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-medium text-muted-foreground">Contenu</label>
+                            {reportAccess?.canEditReport && editingContent === null && <Button variant="ghost" size="sm" onClick={() => setEditingContent(activeSection.content)}>Modifier</Button>}
+                          </div>
+                          {editingContent !== null && <>
+                            <Textarea className="min-h-48 text-sm" value={editingContent} onChange={(event) => setEditingContent(event.target.value)} />
+                            <div className="flex gap-2">
+                              <Button size="sm" onClick={saveSectionEdit}>Enregistrer</Button>
+                              <Button size="sm" variant="outline" onClick={() => setEditingContent(null)}>Annuler</Button>
+                            </div>
+                          </>}
+                        </div>
+
                         {/* Instructions */}
                         <div className="space-y-2">
                           <label className="text-xs font-medium text-muted-foreground">
@@ -604,7 +660,7 @@ export function ReportEditorView() {
                           className="w-full"
                           size="sm"
                           onClick={() => handleRegenerateSection()}
-                          disabled={regenerating}
+                          disabled={regenerating || !reportAccess?.canRegenerate}
                         >
                           {regenerating ? (
                             <Loader2 className="mr-2 size-3.5 animate-spin" />

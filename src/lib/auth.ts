@@ -35,6 +35,8 @@ export const isGoogleAuthConfigured = Boolean(googleClientId && googleClientSecr
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(db),
+  // PRODUCTION: verify Secure/HttpOnly/SameSite cookies under the final HTTPS
+  // origin; add explicit cookie overrides only after browser verification.
   session: {
     strategy: 'database',
   },

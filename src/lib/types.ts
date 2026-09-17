@@ -54,11 +54,9 @@ export interface ProjectFull {
 export interface DocumentItem {
   id: string;
   projectId: string;
-  filename: string;
   originalName: string;
   mimeType: string;
   size: number;
-  storageKey: string;
   status: string;
   chunkCount: number;
   createdAt: Date;
@@ -222,20 +220,7 @@ export interface UpdateReportBody {
   sectionContent?: string;
 }
 
-// ==================== Demo Content ====================
-
-export const DEMO_FRENCH_TOPICS = [
-  "L'intelligence artificielle dans la santé",
-  "La blockchain et la finance décentralisée",
-  "Le cloud computing et les architectures microservices",
-  "L'Internet des Objets (IoT) dans l'agriculture",
-  "La cybersécurité dans les systèmes critiques",
-  "Le machine learning pour la prédiction financière",
-  "Les systèmes distribués et le computing en grille",
-  "Le traitement du langage naturel pour l'analyse de sentiment",
-  "La vision par ordinateur dans les véhicules autonomes",
-  "L'énergie renouvelable et les smart grids",
-];
+// ==================== Seed-only demo fixtures ====================
 
 export function generateFrenchSummary(topic: string): string {
   return `# Synthèse Bibliographique : ${topic}

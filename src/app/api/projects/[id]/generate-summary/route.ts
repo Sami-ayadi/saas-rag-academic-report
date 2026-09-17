@@ -4,9 +4,9 @@ import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/lib/db'
 import { createNotification } from '@/lib/notifications'
 import { getAuthenticatedUser } from '@/lib/auth'
-import { generateSummaryForProject } from '@/lib/report-generation'
+import { generateSummaryForProject, isLlmConfigured } from '@/lib/report-generation'
 import { resolveEntitlements } from '@/lib/entitlements'
-import { consumeQuota, refundQuota, usagePeriod } from '@/lib/entitlements-server'
+import { consumeQuota, QuotaExceededError, refundQuota, usagePeriod } from '@/lib/entitlements-server'
 
 export const runtime = 'nodejs'
 export const maxDuration = 180
@@ -27,17 +27,19 @@ export async function POST(
     },
   })
   if (!project) return NextResponse.json({ error: 'Projet non trouvé' }, { status: 404 })
+  if (!isLlmConfigured()) return NextResponse.json({ error: 'Le service IA n’est pas configuré. Ajoutez LLM_API_KEY au serveur.', code: 'LLM_NOT_CONFIGURED' }, { status: 503 })
 
   // Consume the credit before any model call so parallel requests cannot exceed the plan.
   const entitlements = resolveEntitlements(user)
   const period = usagePeriod()
-  const quota = await consumeQuota(user.id, 'generation', entitlements.monthlyGenerationCredits, period)
-  if (!quota.allowed) {
+  try {
+    await consumeQuota(user.id, 'generation', entitlements.monthlyGenerationCredits, period)
+  } catch (error) {
+    if (!(error instanceof QuotaExceededError)) throw error
     return NextResponse.json(
       {
-        error: `Crédits de génération épuisés (${quota.used}/${quota.limit} ce mois-ci).`,
+        error: 'Crédits de génération épuisés pour ce mois.',
         code: 'GENERATION_QUOTA_EXCEEDED',
-        quota: { used: quota.used, limit: quota.limit, remaining: 0 },
       },
       { status: 402 },
     )
@@ -90,8 +92,8 @@ export async function POST(
       orderBy: { version: 'desc' },
       select: { version: true },
     })
-    const summary = await db.summary.create({
-      data: {
+    const summary = await db.$transaction(async (transaction) => {
+      const created = await transaction.summary.create({ data: {
         id: uuidv4(),
         projectId: id,
         version: (latest?.version ?? 0) + 1,
@@ -103,33 +105,31 @@ export async function POST(
           sourceNames: project.documents.map((document) => document.originalName),
         }),
         status: 'SUMMARY_READY',
-      },
-    })
-
-    await db.$transaction([
-      db.generationJob.update({
+      } })
+      await transaction.generationJob.update({
         where: { id: job.id },
         data: {
           status: 'COMPLETED',
           progress: 100,
           progressMessage: 'Synthèse générée avec succès',
-          outputData: JSON.stringify({ summaryId: summary.id, provider: generated.provider, model: generated.model }),
+          outputData: JSON.stringify({ summaryId: created.id, provider: generated.provider, model: generated.model }),
           completedAt: new Date(),
         },
-      }),
-      db.project.update({ where: { id }, data: { status: 'SUMMARY_READY' } }),
-      db.apiUsage.create({
+      })
+      await transaction.project.update({ where: { id }, data: { status: 'SUMMARY_READY' } })
+      await transaction.apiUsage.create({
         data: {
           userId: user.id,
           projectId: id,
           type: 'summary_generation',
           inputTokens: generated.inputTokens,
           outputTokens: generated.outputTokens,
-          costUsd: 0,
+          costUsd: generated.costUsd,
         },
-      }),
-    ])
-    await createNotification({ userId: user.id, type: 'GENERATION_COMPLETED', title: 'Synthèse prête', message: `La synthèse de « ${project.title} » est disponible.`, linkView: 'dashboard', metadata: { projectId: id, summaryId: summary.id } })
+      })
+      return created
+    })
+    await createNotification({ userId: user.id, type: 'GENERATION_COMPLETED', title: 'Synthèse prête', message: `La synthèse de « ${project.title} » est disponible.`, linkView: 'dashboard', metadata: { projectId: id, summaryId: summary.id } }).catch((error) => console.error('Summary notification failed:', error))
 
     return NextResponse.json({
       jobId: job.id,
@@ -137,9 +137,7 @@ export async function POST(
       status: 'COMPLETED',
       provider: generated.provider,
       model: generated.model,
-      message: generated.provider !== 'demo'
-        ? 'Synthèse générée par IA'
-        : 'Synthèse de démonstration générée localement',
+      message: 'Synthèse générée par IA',
     })
   } catch (error) {
     console.error('POST /api/projects/[id]/generate-summary error:', error)
@@ -157,7 +155,7 @@ export async function POST(
       }),
       db.project.update({ where: { id }, data: { status: 'DRAFT' } }),
     ])
-    await createNotification({ userId: user.id, type: 'GENERATION_FAILED', title: 'Échec de la synthèse', message: `La synthèse de « ${project.title} » n'a pas pu être générée.`, linkView: 'dashboard', metadata: { projectId: id, jobId: job.id } })
-    return NextResponse.json({ error: 'La génération de la synthèse a échoué' }, { status: 502 })
+    await createNotification({ userId: user.id, type: 'GENERATION_FAILED', title: 'Échec de la synthèse', message: `La synthèse de « ${project.title} » n'a pas pu être générée.`, linkView: 'dashboard', metadata: { projectId: id, jobId: job.id } }).catch((notificationError) => console.error('Summary failure notification failed:', notificationError))
+    return NextResponse.json({ error: 'La génération de la synthèse a échoué', code: 'LLM_GENERATION_FAILED' }, { status: 502 })
   }
 }

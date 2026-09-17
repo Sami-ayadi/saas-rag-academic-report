@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod/v4'
 
 import { getAuthenticatedUser } from '@/lib/auth'
 import { db } from '@/lib/db'
+import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input'
 
 export const runtime = 'nodejs'
+
+const markReadSchema = z.object({
+  ids: z.array(z.string().min(1).max(100)).max(50).optional(),
+  all: z.boolean().optional(),
+}).strict()
 
 export async function GET(request: NextRequest) {
   const user = await getAuthenticatedUser()
@@ -23,12 +30,17 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   const user = await getAuthenticatedUser()
   if (!user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 })
-  const body = await request.json() as { ids?: unknown; all?: unknown }
+  let body: z.infer<typeof markReadSchema>
+  try {
+    body = await readJsonBody(request, markReadSchema, 8_000)
+  } catch (error) {
+    return apiRequestErrorResponse(error) ?? NextResponse.json({ error: 'Données invalides', code: 'INVALID_INPUT' }, { status: 400 })
+  }
   if (body.all === true) {
     const result = await db.notification.updateMany({ where: { userId: user.id, readAt: null }, data: { readAt: new Date() } })
     return NextResponse.json({ updated: result.count })
   }
-  const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === 'string').slice(0, 50) : []
+  const ids = body.ids ?? []
   if (ids.length === 0) return NextResponse.json({ updated: 0 })
   const result = await db.notification.updateMany({ where: { id: { in: ids }, userId: user.id, readAt: null }, data: { readAt: new Date() } })
   return NextResponse.json({ updated: result.count })

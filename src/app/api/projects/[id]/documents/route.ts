@@ -8,6 +8,7 @@ import { db } from '@/lib/db'
 import { getAuthenticatedUser } from '@/lib/auth'
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input'
 import { resolveEntitlements } from '@/lib/entitlements'
+import { isSerializationFailure, QuotaExceededError } from '@/lib/entitlements-server'
 
 export const runtime = 'nodejs'
 
@@ -62,7 +63,7 @@ export async function GET(
       where: { projectId: id },
       orderBy: { createdAt: 'desc' },
     })
-    return NextResponse.json({ documents })
+    return NextResponse.json({ documents: documents.map(({ storageKey: _storageKey, ...document }) => document) })
   } catch (error) {
     console.error('GET /api/projects/[id]/documents error:', error)
     return NextResponse.json({ error: 'Erreur lors de la récupération des documents' }, { status: 500 })
@@ -138,6 +139,10 @@ export async function POST(
     const chunks = text.match(/[\s\S]{1,1500}/g)?.slice(0, 100) ?? []
     const documentId = crypto.randomUUID()
     const document = await db.$transaction(async (transaction) => {
+      const currentCount = await transaction.document.count({ where: { projectId: id } })
+      if (currentCount >= entitlements.documentsPerProject) {
+        throw new QuotaExceededError('Document limit reached')
+      }
       const created = await transaction.document.create({
         data: {
           id: documentId,
@@ -165,11 +170,18 @@ export async function POST(
         })
       }
       return created
-    })
+    }, { isolationLevel: 'Serializable' })
 
-    return NextResponse.json({ document }, { status: 201 })
+    const { storageKey: _storageKey, ...publicDocument } = document
+    return NextResponse.json({ document: publicDocument }, { status: 201 })
   } catch (error) {
     if (storedAbsolutePath) await unlink(storedAbsolutePath).catch(() => undefined)
+    if (error instanceof QuotaExceededError) {
+      return NextResponse.json({ error: 'Limite de documents atteinte pour ce projet.', code: 'DOCUMENT_LIMIT_REACHED' }, { status: 402 })
+    }
+    if (isSerializationFailure(error)) {
+      return NextResponse.json({ error: 'Ajout concurrent détecté. Réessayez.', code: 'CONCURRENT_UPLOAD' }, { status: 409 })
+    }
     console.error('POST /api/projects/[id]/documents error:', error)
     return NextResponse.json({ error: 'Erreur lors de l’enregistrement du document' }, { status: 500 })
   }

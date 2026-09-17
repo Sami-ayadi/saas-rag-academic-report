@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createReportExport } from './report-export'
-import { generateReportForProject, generateSummaryForProject } from './report-generation'
+import { generateReportForProject, generateSummaryForProject, isLlmConfigured, reviseReportSection } from './report-generation'
+import type { ReportSection } from './types'
 
 const originalEnv = {
+  LLM_API_KEY: process.env.LLM_API_KEY,
+  LLM_BASE_URL: process.env.LLM_BASE_URL,
+  LLM_REPORT_MODEL: process.env.LLM_REPORT_MODEL,
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
   OPENAI_REPORT_MODEL: process.env.OPENAI_REPORT_MODEL,
@@ -42,7 +46,7 @@ function chatCompletion(text: string, usage = { prompt_tokens: 111, completion_t
   } as Response
 }
 
-const fourSections = [
+const fourSections: ReportSection[] = [
   {
     id: 'introduction',
     title: 'Introduction',
@@ -78,15 +82,11 @@ const fourSections = [
 ]
 
 describe('report generation and exports', () => {
-  it('generates a complete local preview without an API key', async () => {
+  it('requires a hosted API key and never substitutes local report text', async () => {
+    delete process.env.LLM_API_KEY
     delete process.env.OPENAI_API_KEY
-    const summary = await generateSummaryForProject(project)
-    const report = await generateReportForProject(project, summary.content)
-
-    expect(summary.provider).toBe('demo')
-    expect(summary.content.length).toBeGreaterThan(500)
-    expect(report.provider).toBe('demo')
-    expect(report.content.length).toBeGreaterThanOrEqual(4)
+    await expect(generateSummaryForProject(project)).rejects.toThrow('LLM_API_KEY')
+    await expect(generateReportForProject(project, project.brief ?? '')).rejects.toThrow('LLM_API_KEY')
   })
 
   it('calls an OpenAI-compatible chat-completions endpoint with a bearer key and reports usage', async () => {
@@ -124,10 +124,8 @@ describe('report generation and exports', () => {
   })
 
   it('creates valid Markdown, DOCX, and PDF payloads', async () => {
-    delete process.env.OPENAI_API_KEY
-    const generated = await generateReportForProject(project, project.brief)
-    const content = generated.content.map((section) => `# ${section.title}\n\n${section.content}`).join('\n\n')
-    const exportable = { title: project.title, content, sections: generated.content, project }
+    const content = fourSections.map((section) => `# ${section.title}\n\n${section.content}`).join('\n\n')
+    const exportable = { title: project.title, content, sections: fourSections, project }
 
     const markdown = await createReportExport(exportable, 'md')
     const docx = await createReportExport(exportable, 'docx')
@@ -140,7 +138,7 @@ describe('report generation and exports', () => {
 
   it('keeps strict json_schema mode for the official OpenAI host and parses fenced JSON', async () => {
     process.env.OPENAI_API_KEY = 'test-key'
-    delete process.env.OPENAI_BASE_URL
+    process.env.OPENAI_BASE_URL = 'https://api.openai.com/v1'
     delete process.env.OPENAI_JSON_MODE
     const fenced = '```json\n' + JSON.stringify({ sections: fourSections }) + '\n```'
     const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
@@ -171,5 +169,26 @@ describe('report generation and exports', () => {
     process.env.OPENAI_JSON_MODE = 'off'
     vi.stubGlobal('fetch', vi.fn(async () => chatCompletion('{"sections":"not-an-array"}')))
     await expect(generateReportForProject(project, project.brief ?? '')).rejects.toThrow()
+  })
+
+  it('rejects a local model endpoint even when an API key is present', async () => {
+    process.env.LLM_API_KEY = 'test-key'
+    process.env.LLM_BASE_URL = 'http://localhost:11434/v1'
+    expect(isLlmConfigured()).toBe(false)
+    await expect(generateSummaryForProject(project)).rejects.toThrow('hosted HTTPS')
+  })
+
+  it('revises a section through the hosted API and treats instructions as untrusted data', async () => {
+    process.env.LLM_API_KEY = 'test-key'
+    process.env.LLM_BASE_URL = 'https://llm.example.test/v1'
+    process.env.LLM_REPORT_MODEL = 'openrouter/free'
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => chatCompletion('Ce contenu révisé est une prose académique complète qui conserve les faits fournis par l’étudiant et explique les objectifs et la méthode de façon claire.'))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await reviseReportSection(project, fourSections[0], 'Améliorer la méthode')
+    expect(result.provider).toBe('openai-compatible')
+    expect(result.content).toContain('contenu révisé')
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
+    expect(body.messages[0].content).toContain('untrusted data')
+    expect(body.messages[1].content).toContain('UNTRUSTED_REVISION_INPUT_JSON')
   })
 })

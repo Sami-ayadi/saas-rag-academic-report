@@ -1,6 +1,6 @@
 # RAG Report — Plateforme SaaS de Génération de Rapports Académiques
 
-> Generation works locally with a preview generator. Set `OPENAI_API_KEY` (and optionally `OPENAI_REPORT_MODEL`) to enable model-backed summary and report generation. Markdown, DOCX, and PDF exports return real downloadable files. Project uploads accept validated PDF, DOCX, TXT, and Markdown files up to 10 MB.
+> Summary, report, and section revision use a hosted LLM API. Set `LLM_API_KEY` to an OpenRouter key; the default model is `openrouter/free`. There is no local writing fallback. The free model allowance is limited, so a 50-page report may need a fixed paid model. Markdown, DOCX, and PDF exports return downloadable files for entitled plans.
 
 <p align="center">
   <strong>Pipeline RAG intelligent pour la synthèse documentaire et la génération de rapports académiques structurés</strong><br/>
@@ -202,7 +202,7 @@ npm install
 
 # 3. Configurer les variables d'environnement
 cp .env.example .env
-# Éditer .env et définir DATABASE_URL, NEXTAUTH_SECRET et les identifiants Google OAuth
+# Éditer .env et définir DATABASE_URL, NEXTAUTH_SECRET, LLM_API_KEY et les identifiants Google OAuth
 
 # 4. Démarrer PostgreSQL et appliquer les migrations
 docker compose up -d postgres
@@ -229,7 +229,10 @@ L'application est accessible sur **http://localhost:3000**.
 | `NEXTAUTH_SECRET` | Secret de session et de signature CSRF (32 caractères minimum) | — |
 | `GOOGLE_CLIENT_ID` | Identifiant OAuth Google | — |
 | `GOOGLE_CLIENT_SECRET` | Secret OAuth Google | — |
-| `ADMIN_EMAILS` | Adresses Google administratrices, séparées par des virgules | — |
+| `PLATFORM_OWNER_EMAILS` | Adresses Google autorisées à administrer la plateforme | — |
+| `LLM_API_KEY` | Clé serveur du fournisseur LLM hébergé (OpenRouter par défaut) | — (génération indisponible) |
+| `LLM_BASE_URL` | URL de l'API compatible OpenAI | `https://openrouter.ai/api/v1` |
+| `LLM_REPORT_MODEL` | Modèle de rédaction et de révision | `openrouter/free` |
 | `AUTH_ALLOW_DEMO` | Active l'utilisateur démo côté serveur, hors production uniquement | `false` |
 | `NEXT_PUBLIC_AUTH_ALLOW_DEMO` | Active l'interface démo côté client | `false` |
 
@@ -364,7 +367,7 @@ projet        + Analyse        IA prête         du rapport     édité         
 
 1. **DRAFT** — L'utilisateur crée un projet via le formulaire (titre, niveau académique, université, domaine, langue). Les métadonnées sont stockées en BDD.
 
-2. **SUMMARIZING** — Les documents sources sont uploadés (PDF, articles). Le système les chunk, génère des embeddings (Voyage AI), et produit une synthèse structurée via Claude AI.
+2. **SUMMARIZING** — Les documents TXT/MD sont découpés en extraits; les PDF/DOCX sont stockés sans extraction de texte. La synthèse est rédigée via une API LLM hébergée.
 
 3. **SUMMARY_READY** — La synthèse est disponible dans l'éditeur de résumé. L'utilisateur peut la consulter, la modifier, et lancer la génération du rapport.
 
@@ -399,15 +402,15 @@ projet        + Analyse        IA prête         du rapport     édité         
 
 | Composant | Pourquoi | Comment |
 |-----------|----------|--------|
-| **Claude API réelle** | Remplacer la simulation de génération | Appeler l'API Anthropic dans les routes `generate-summary` et `generate-report` |
-| **Voyage AI embeddings** | Embeddings réels pour le RAG | Intégrer le SDK Voyage AI pour le chunking et l'embedding |
-| **Stripe** | Paiement des abonnements | Utiliser `stripeCustomerId`, `stripePriceId`, `stripeSubId` du modèle User |
-| **Upload de fichiers réels** | Stockage persistant | Ajouter S3/R2/Uploadthing pour le stockage des documents |
-| **WebSocket / SSE** | Progression temps réel des jobs | Remplacer le polling par Server-Sent Events ou Socket.io |
+| **Worker durable** | Génération fiable des longs rapports | Utiliser une file et un worker avec reprise et idempotence |
+| **Embeddings réels** | Recherche sémantique avec sources | Extraire PDF/DOCX, vectoriser les extraits et conserver leur provenance |
+| **Stripe live** | Activer les abonnements après validation | Configurer les prix et le webhook de production; le code Checkout/Portal existe |
+| **Stockage privé partagé** | Conserver les documents entre instances | Ajouter S3/R2 avec accès authentifié et analyse antivirus |
+| **WebSocket / SSE** | Progression temps réel des jobs | Améliorer le polling existant après le worker durable |
 | **Tests étendus** | Fiabilité du code | Ajouter Testing Library et des tests end-to-end aux tests Vitest existants |
-| **Rate limiting** | Protéger les API | Middleware Next.js ou upstash/ratelimit |
+| **Rate limiting partagé** | Protéger plusieurs instances | Remplacer le limiteur en mémoire par Redis et une IP de proxy fiable |
 | **i18n** | L'app est en français | `next-intl` est déjà en dépendance, configurer les locales |
-| **Export réel PDF/DOCX** | Génération de fichiers | Utiliser `@react-pdf/renderer` ou `puppeteer` pour PDF, `docx` pour Word |
+| **Mise en page export** | Livrable académique professionnel | Ajouter couverture, pagination, sommaire autorisé et vérification visuelle |
 
 ### Bonnes pratiques pour l'équipe Frontend
 

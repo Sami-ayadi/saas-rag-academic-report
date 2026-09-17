@@ -17,6 +17,8 @@ const globalRateStore = globalThis as typeof globalThis & {
 }
 const rateLimits = globalRateStore.__ragRateLimits ?? new Map<string, RateEntry>()
 globalRateStore.__ragRateLimits = rateLimits
+// PRODUCTION: replace this per-process map with a shared limiter and use only
+// forwarding headers established by a trusted edge proxy.
 
 function clientKey(request: NextRequest) {
   const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
@@ -140,6 +142,7 @@ export function proxy(request: NextRequest) {
 
   const requestHeaders = new Headers(request.headers)
   const requestId = request.headers.get('x-request-id') ?? crypto.randomUUID()
+  // PRODUCTION: export request IDs and redacted errors to a managed collector.
   requestHeaders.set('x-request-id', requestId)
   requestHeaders.set('x-nonce', nonce)
   requestHeaders.set('Content-Security-Policy', contentSecurityPolicy(nonce))
