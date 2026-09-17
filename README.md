@@ -233,10 +233,18 @@ L'application est accessible sur **http://localhost:3000**.
 | `LLM_API_KEY` | Clé serveur du fournisseur LLM hébergé (OpenRouter par défaut) | — (génération indisponible) |
 | `LLM_BASE_URL` | URL de l'API compatible OpenAI | `https://openrouter.ai/api/v1` |
 | `LLM_REPORT_MODEL` | Modèle de rédaction et de révision | `openrouter/free` |
+| `LLM_FALLBACK_API_KEY` | Clé d’un deuxième fournisseur hébergé (facultatif) | — |
+| `LLM_FALLBACK_BASE_URL` | URL HTTPS du deuxième fournisseur, différente de `LLM_BASE_URL` | — |
+| `LLM_FALLBACK_MODEL` | Modèle du deuxième fournisseur | — |
+| `LLM_FALLBACK_2_API_KEY` | Clé d’un troisième modèle hébergé (facultatif) | — |
+| `LLM_FALLBACK_2_BASE_URL` | URL HTTPS du troisième modèle | — |
+| `LLM_FALLBACK_2_MODEL` | Identifiant du troisième modèle | — |
 | `AUTH_ALLOW_DEMO` | Active l'utilisateur démo côté serveur, hors production uniquement | `false` |
 | `NEXT_PUBLIC_AUTH_ALLOW_DEMO` | Active l'interface démo côté client | `false` |
 
 Le guide pas à pas se trouve dans [GOOGLE_AUTH_SETUP.md](./GOOGLE_AUTH_SETUP.md). Pour le développement, l'origine est `http://localhost:3000` et l'URI de redirection est `http://localhost:3000/api/auth/callback/google`.
+
+Quand les trois variables d’un endpoint `LLM_FALLBACK_*` sont définies, les appels alternent entre les endpoints configurés. Si l’un répond avec une erreur HTTP, le même appel est essayé sur le suivant. Deux modèles TokenRouter peuvent utiliser le même URL avec des clés différentes. Les clés d’un même compte OpenRouter partagent le quota gratuit : elles ne constituent pas deux fournisseurs indépendants.
 
 ---
 

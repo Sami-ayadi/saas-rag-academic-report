@@ -14,6 +14,12 @@ const originalEnv = {
   OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
   OPENAI_REPORT_MODEL: process.env.OPENAI_REPORT_MODEL,
   OPENAI_JSON_MODE: process.env.OPENAI_JSON_MODE,
+  LLM_FALLBACK_API_KEY: process.env.LLM_FALLBACK_API_KEY,
+  LLM_FALLBACK_BASE_URL: process.env.LLM_FALLBACK_BASE_URL,
+  LLM_FALLBACK_MODEL: process.env.LLM_FALLBACK_MODEL,
+  LLM_FALLBACK_2_API_KEY: process.env.LLM_FALLBACK_2_API_KEY,
+  LLM_FALLBACK_2_BASE_URL: process.env.LLM_FALLBACK_2_BASE_URL,
+  LLM_FALLBACK_2_MODEL: process.env.LLM_FALLBACK_2_MODEL,
 }
 
 const project = {
@@ -323,6 +329,70 @@ describe('report generation and exports', () => {
     const result = await generateSummaryForProject(project)
     expect(result.content).toContain('synthèse')
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('alternates independent providers and fails over when OpenRouter returns 429', async () => {
+    process.env.LLM_API_KEY = 'openrouter-test-key'
+    process.env.LLM_BASE_URL = 'https://openrouter.ai/api/v1'
+    process.env.LLM_REPORT_MODEL = 'openrouter/free'
+    process.env.LLM_FALLBACK_API_KEY = 'groq-test-key'
+    process.env.LLM_FALLBACK_BASE_URL = 'https://api.groq.com/openai/v1'
+    process.env.LLM_FALLBACK_MODEL = 'openai/gpt-oss-120b'
+    const calls: string[] = []
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const host = new URL(String(url)).host
+      calls.push(host)
+      return host === 'openrouter.ai'
+        ? { ok: false, status: 429, headers: new Headers() } as Response
+        : chatCompletion('Une synthèse académique complète qui expose le contexte du projet, la problématique, les objectifs et la méthode à suivre.')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const first = await generateSummaryForProject(project)
+    const second = await generateSummaryForProject(project)
+    expect(first.content).toContain('synthèse')
+    expect(second.content).toContain('synthèse')
+    expect(calls).toHaveLength(3)
+    expect(calls).toContain('openrouter.ai')
+    expect(calls).toContain('api.groq.com')
+    expect(isLlmConfigured()).toBe(true)
+  })
+
+  it('rejects a fallback that points to the same provider endpoint', () => {
+    process.env.LLM_API_KEY = 'openrouter-test-key'
+    process.env.LLM_BASE_URL = 'https://openrouter.ai/api/v1'
+    process.env.LLM_FALLBACK_API_KEY = 'another-openrouter-key'
+    process.env.LLM_FALLBACK_BASE_URL = 'https://openrouter.ai/api/v1'
+    process.env.LLM_FALLBACK_MODEL = 'openrouter/free'
+    expect(isLlmConfigured()).toBe(false)
+  })
+
+  it('cycles through three models and reaches a working provider after 429, 503 and 403', async () => {
+    process.env.LLM_API_KEY = 'openrouter-test-key'
+    process.env.LLM_BASE_URL = 'https://openrouter.ai/api/v1'
+    process.env.LLM_REPORT_MODEL = 'openrouter/free'
+    process.env.LLM_FALLBACK_API_KEY = 'glm-test-key'
+    process.env.LLM_FALLBACK_BASE_URL = 'https://api.tokenrouter.com/v1'
+    process.env.LLM_FALLBACK_MODEL = 'z-ai/glm-5.3-free'
+    process.env.LLM_FALLBACK_2_API_KEY = 'nemotron-test-key'
+    process.env.LLM_FALLBACK_2_BASE_URL = 'https://api.tokenrouter.com/v1'
+    process.env.LLM_FALLBACK_2_MODEL = 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
+    const attempted: string[] = []
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const model = JSON.parse(String(init?.body)).model as string
+      attempted.push(model)
+      if (model === 'openrouter/free') return { ok: false, status: 429, headers: new Headers() } as Response
+      if (model === 'z-ai/glm-5.3-free') return { ok: false, status: 503, headers: new Headers() } as Response
+      return chatCompletion('Une synthèse académique complète qui expose le contexte du projet, la problématique, les objectifs et la méthode à suivre.')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (let i = 0; i < 3; i++) {
+      const result = await generateSummaryForProject(project)
+      expect(result.content).toContain('synthèse')
+    }
+    expect(attempted).toHaveLength(6)
+    expect(new Set(attempted).size).toBe(3)
   })
 
   it('promises resume only when a rate-limited job saved sections', () => {

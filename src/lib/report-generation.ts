@@ -69,10 +69,8 @@ const DEFAULT_LLM_BASE_URL = 'https://openrouter.ai/api/v1'
 const DEFAULT_LLM_MODEL = 'openrouter/free'
 
 export function isLlmConfigured(): boolean {
-  if (!process.env.LLM_API_KEY?.trim() && !process.env.OPENAI_API_KEY?.trim()) return false
   try {
-    llmBaseUrl()
-    return true
+    return llmEndpoints().length > 0
   } catch {
     return false
   }
@@ -95,8 +93,7 @@ export async function isLlmReachable(): Promise<boolean> {
 const REPORT_JSON_CONTRACT =
   'Respond with a single JSON object and nothing else, no Markdown fences: {"sections":[{"id":"introduction","title":"Introduction","content":"Markdown body of at least 100 characters","status":"completed","order":0}]}. Rules: the sections array must contain 5 to 8 entries; each entry has exactly the keys id, title, content, status, order; status must be the exact string "completed"; order values are consecutive integers starting at 0; each content is a Markdown string of at least 100 characters (several full sentences).'
 
-function llmBaseUrl() {
-  const candidate = process.env.LLM_BASE_URL?.trim() || process.env.OPENAI_BASE_URL?.trim() || DEFAULT_LLM_BASE_URL
+function validateLlmBaseUrl(candidate: string) {
   const url = new URL(candidate)
   const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
   const privateHost = hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local') ||
@@ -109,17 +106,54 @@ function llmBaseUrl() {
   return candidate.replace(/\/+$/, '')
 }
 
-function isOfficialOpenAiHost() {
+function llmBaseUrl() {
+  return validateLlmBaseUrl(process.env.LLM_BASE_URL?.trim() || process.env.OPENAI_BASE_URL?.trim() || DEFAULT_LLM_BASE_URL)
+}
+
+interface LlmEndpoint {
+  baseUrl: string
+  apiKey: string
+  model: string
+}
+
+function llmEndpoints(): LlmEndpoint[] {
+  const primaryKey = process.env.LLM_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim()
+  if (!primaryKey) return []
+  const primary = {
+    baseUrl: llmBaseUrl(),
+    apiKey: primaryKey,
+    model: process.env.LLM_REPORT_MODEL?.trim() || process.env.OPENAI_REPORT_MODEL?.trim() || DEFAULT_LLM_MODEL,
+  }
+  const endpoints = [primary]
+  for (const prefix of ['LLM_FALLBACK', 'LLM_FALLBACK_2']) {
+    const apiKey = process.env[`${prefix}_API_KEY`]?.trim()
+    const baseUrl = process.env[`${prefix}_BASE_URL`]?.trim()
+    const model = process.env[`${prefix}_MODEL`]?.trim()
+    if (!apiKey && !baseUrl && !model) continue
+    if (!apiKey || !baseUrl || !model) throw new Error(`Complete ${prefix}_API_KEY, ${prefix}_BASE_URL and ${prefix}_MODEL`)
+    const endpoint = { baseUrl: validateLlmBaseUrl(baseUrl), apiKey, model }
+    if (endpoint.baseUrl === primary.baseUrl) throw new Error('Fallbacks must use a different provider from the primary endpoint')
+    if (endpoints.some((existing) => existing.baseUrl === endpoint.baseUrl && existing.model === endpoint.model)) {
+      throw new Error('Duplicate fallback provider/model configuration')
+    }
+    endpoints.push(endpoint)
+  }
+  return endpoints
+}
+
+let nextEndpoint = 0
+
+function isOfficialOpenAiHost(baseUrl = llmBaseUrl()) {
   try {
-    return new URL(llmBaseUrl()).host === 'api.openai.com'
+    return new URL(baseUrl).host === 'api.openai.com'
   } catch {
     return true
   }
 }
 
-function isOpenRouterHost() {
+function isOpenRouterHost(baseUrl = llmBaseUrl()) {
   try {
-    return new URL(llmBaseUrl()).host === 'openrouter.ai'
+    return new URL(baseUrl).host === 'openrouter.ai'
   } catch {
     return false
   }
@@ -127,12 +161,12 @@ function isOpenRouterHost() {
 
 type JsonMode = 'schema' | 'object' | 'off'
 
-function resolveJsonMode(): JsonMode {
+function resolveJsonMode(baseUrl: string): JsonMode {
   const configured = process.env.OPENAI_JSON_MODE?.trim().toLowerCase()
   if (configured === 'schema' || configured === 'object' || configured === 'off') return configured
   // OpenRouter routes schema requests to models that support structured output.
   // Other compatible providers keep the broader json_object mode by default.
-  return isOfficialOpenAiHost() || isOpenRouterHost() ? 'schema' : 'object'
+  return isOfficialOpenAiHost(baseUrl) || isOpenRouterHost(baseUrl) ? 'schema' : 'object'
 }
 
 function parseJsonPayload(text: string): unknown {
@@ -155,15 +189,31 @@ async function callLLM(input: {
   maxOutputTokens: number
   jsonSchema?: Record<string, unknown>
 }): Promise<LlmCompletion> {
-  const apiKey = process.env.LLM_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim()
-  if (!apiKey) throw new Error('LLM_API_KEY is required for AI generation')
+  const endpoints = llmEndpoints()
+  if (!endpoints.length) throw new Error('LLM_API_KEY is required for AI generation')
+  const start = nextEndpoint++ % endpoints.length
+  for (let offset = 0; offset < endpoints.length; offset++) {
+    try {
+      return await callLlmEndpoint(input, endpoints[(start + offset) % endpoints.length], endpoints.length === 1)
+    } catch (error) {
+      const canFailOver = error instanceof LlmHttpError
+      if (!canFailOver || offset === endpoints.length - 1) throw error
+    }
+  }
+  throw new Error('No LLM endpoint responded')
+}
 
-  const model = process.env.LLM_REPORT_MODEL?.trim() || process.env.OPENAI_REPORT_MODEL?.trim() || DEFAULT_LLM_MODEL
+async function callLlmEndpoint(
+  input: { system: string; prompt: string; maxOutputTokens: number; jsonSchema?: Record<string, unknown> },
+  endpoint: LlmEndpoint,
+  retryShortRateLimit: boolean,
+): Promise<LlmCompletion> {
+  const { baseUrl, apiKey, model } = endpoint
   const timeoutMs = Number(process.env.LLM_TIMEOUT_MS ?? process.env.OPENAI_TIMEOUT_MS ?? 120_000)
-  const officialHost = isOfficialOpenAiHost()
-  const openRouterHost = isOpenRouterHost()
+  const officialHost = isOfficialOpenAiHost(baseUrl)
+  const openRouterHost = isOpenRouterHost(baseUrl)
   const freeRouter = openRouterHost && model === 'openrouter/free'
-  const jsonMode: JsonMode = input.jsonSchema ? resolveJsonMode() : 'off'
+  const jsonMode: JsonMode = input.jsonSchema ? resolveJsonMode(baseUrl) : 'off'
 
   const body: Record<string, unknown> = {
     model,
@@ -191,7 +241,7 @@ async function callLLM(input: {
 
   let response: Response
   for (let attempt = 0; ; attempt++) {
-    response = await fetch(`${llmBaseUrl()}/chat/completions`, {
+    response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -207,7 +257,7 @@ async function callLLM(input: {
       : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN
     // Retry only when the provider explicitly supplies a short reset window.
     // Blind retries can consume a free account's daily request allowance.
-    if (response.status !== 429 || attempt > 0 || !Number.isFinite(delayMs) || delayMs < 0 || delayMs > 60_000) break
+    if (!retryShortRateLimit || response.status !== 429 || attempt > 0 || !Number.isFinite(delayMs) || delayMs < 0 || delayMs > 60_000) break
     await new Promise((resolve) => setTimeout(resolve, delayMs))
   }
 
@@ -605,7 +655,7 @@ async function generateLongSection(
   index: number,
   previousRecap: string,
   accumulatedWords: number,
-): Promise<{ section: ReportSection; tokens: { input: number; output: number } }> {
+): Promise<{ section: ReportSection; tokens: { input: number; output: number }; models: string[] }> {
   const target = outline.sections[index]
   const remaining = outline.sections.length - index - 1
   const minWords = Math.max(200, Math.round(target.estimatedWords * 0.82))
@@ -635,6 +685,7 @@ ${summary.slice(0, 20_000)}`
   let draft: string | undefined
   let lastSectionError: unknown
   let sectionTokens = { input: 0, output: 0 }
+  const models = new Set<string>()
   for (let attempt = 1; attempt <= 4 && !parsed; attempt++) {
     const continuing = Boolean(draft)
     const neededWords = draft ? Math.max(120, Math.min(500, target.estimatedWords - draft.split(/\s+/).filter(Boolean).length)) : 0
@@ -658,6 +709,7 @@ ${summary.slice(0, 20_000)}`
     }
     sectionTokens.input += completion.inputTokens
     sectionTokens.output += completion.outputTokens
+    models.add(completion.model)
     try {
       if (draft) {
         const addition = sectionMarkdownFromCompletion(completion.text)
@@ -692,6 +744,7 @@ ${summary.slice(0, 20_000)}`
       order: target.order,
     },
     tokens: sectionTokens,
+    models: [...models],
   }
 }
 
@@ -727,6 +780,7 @@ export interface ReportGenerationCheckpoint {
   sections: ReportSection[]
   inputTokens: number
   outputTokens: number
+  modelsUsed?: string[]
 }
 
 const checkpointSchema = z.object({
@@ -740,6 +794,7 @@ const checkpointSchema = z.object({
   }).strict()).max(25),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
+  modelsUsed: z.array(z.string().min(1).max(200)).max(25).optional(),
 }).strict()
 
 export function parseReportGenerationCheckpoint(value: unknown): ReportGenerationCheckpoint | null {
@@ -767,27 +822,29 @@ export async function generateLongReportForProject(
   const sections: ReportSection[] = [...(resumed?.sections ?? [])]
   let totalInput = resumed?.inputTokens ?? 0
   let totalOutput = resumed?.outputTokens ?? 0
+  const modelsUsed = new Set(resumed?.modelsUsed ?? [])
   let words = sections.reduce((sum, section) => sum + section.content.split(/\s+/).filter(Boolean).length, 0)
   const previous = sections.at(-1)
   let recap = previous ? '# ' + previous.title + '\n' + previous.content.slice(0, 3_000) : ''
 
-  if (!resumed) await options?.onCheckpoint?.({ outline, sections: [], inputTokens: 0, outputTokens: 0 })
+  if (!resumed) await options?.onCheckpoint?.({ outline, sections: [], inputTokens: 0, outputTokens: 0, modelsUsed: [] })
 
   for (let i = sections.length; i < outline.sections.length; i++) {
-    const { section, tokens } = await generateLongSection(project, outline, summary, i, recap, words)
+    const { section, tokens, models } = await generateLongSection(project, outline, summary, i, recap, words)
     sections.push(section)
     totalInput += tokens.input
     totalOutput += tokens.output
+    for (const model of models) modelsUsed.add(model)
     words += Math.round(section.content.split(/\s+/).length)
     recap = '# ' + section.title + '\n' + section.content.slice(0, 3_000)
-    await options?.onCheckpoint?.({ outline, sections: [...sections], inputTokens: totalInput, outputTokens: totalOutput })
+    await options?.onCheckpoint?.({ outline, sections: [...sections], inputTokens: totalInput, outputTokens: totalOutput, modelsUsed: [...modelsUsed] })
     await onProgress?.({ current: i + 1, total: outline.sections.length, sectionTitle: section.title, wordsSoFar: words })
   }
 
   return {
     content: sections,
     provider: 'openai-compatible',
-    model: process.env.LLM_REPORT_MODEL?.trim() || process.env.OPENAI_REPORT_MODEL?.trim() || DEFAULT_LLM_MODEL,
+    model: [...modelsUsed].join(', ') || llmEndpoints()[0]?.model || DEFAULT_LLM_MODEL,
     inputTokens: totalInput,
     outputTokens: totalOutput,
     costUsd: llmCostUsd(totalInput, totalOutput),
