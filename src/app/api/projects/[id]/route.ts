@@ -80,7 +80,7 @@ export async function GET(
         progressMessage: !canViewOutline && job.type === 'report'
           ? job.status === 'FAILED' ? publicReportFailureMessage(job.progressMessage) : job.status === 'COMPLETED' ? 'Rapport généré' : 'Rédaction du rapport en cours…'
           : job.progressMessage,
-        outputData: canViewOutline ? job.outputData : null,
+        outputData: canViewOutline && (job.type !== 'report' || job.status === 'COMPLETED') ? job.outputData : null,
         errorMessage: null,
       })),
     } });

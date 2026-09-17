@@ -82,7 +82,8 @@ export async function GET(
         progressMessage: !canViewOutline && job.type === 'report'
           ? job.status === 'FAILED' ? publicReportFailureMessage(job.progressMessage) : job.status === 'COMPLETED' ? 'Rapport généré' : 'Rédaction du rapport en cours…'
           : job.progressMessage,
-        outputData: canViewOutline ? parsedOutputData : null,
+        // In-progress report outputData holds the private generation checkpoint.
+        outputData: canViewOutline && (job.type !== 'report' || job.status === 'COMPLETED') ? parsedOutputData : null,
         errorMessage: null,
       },
     });

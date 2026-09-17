@@ -14,7 +14,7 @@ export function isNonRetryableLlmError(error: unknown): boolean {
 
 const failureMessages = {
   payment: 'Le modèle IA sélectionné nécessite des crédits. Choisissez un modèle gratuit ou ajoutez des crédits OpenRouter.',
-  rateLimit: 'Limite de requêtes du fournisseur IA atteinte. Réessayez plus tard.',
+  rateLimit: 'Limite de requêtes du fournisseur IA atteinte. Réessayez plus tard : la progression enregistrée sera reprise.',
   access: 'La clé API IA est invalide ou n’a pas accès au modèle configuré.',
   model: 'Le modèle IA configuré est introuvable. Vérifiez LLM_REPORT_MODEL.',
   request: 'La requête a été refusée par le fournisseur IA. Vérifiez le modèle configuré.',
@@ -31,6 +31,7 @@ export function publicLlmFailureMessage(error: unknown): string | null {
 }
 
 const safeFailureMessages = new Set<string>(Object.values(failureMessages))
+safeFailureMessages.add('Limite de requêtes du fournisseur IA atteinte. Réessayez plus tard.')
 
 export function publicReportFailureMessage(storedMessage: string | null): string {
   return storedMessage && safeFailureMessages.has(storedMessage)

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createReportExport } from './report-export'
-import { generateLongReportForProject, generateReportForProject, generateReportOutline, generateSummaryForProject, isLlmConfigured, reviseReportSection } from './report-generation'
+import { generateLongReportForProject, generateReportForProject, generateReportOutline, generateSummaryForProject, isLlmConfigured, parseReportGenerationCheckpoint, reviseReportSection } from './report-generation'
+import type { ReportGenerationCheckpoint } from './report-generation'
 import { publicLlmFailureMessage, publicReportFailureMessage } from './llm-errors'
 import type { ReportSection } from './types'
 
@@ -264,6 +265,64 @@ describe('report generation and exports', () => {
     expect(message).toContain('crédits')
     expect(publicReportFailureMessage(message)).toBe(message)
     expect(publicReportFailureMessage('raw model output')).toBe('Échec de la génération du rapport')
+  })
+
+  it('checkpoints completed sections on 429 and resumes without repeating them', async () => {
+    process.env.LLM_API_KEY = 'test-key'
+    process.env.LLM_BASE_URL = 'https://openrouter.ai/api/v1'
+    process.env.LLM_REPORT_MODEL = 'openrouter/free'
+    const outline = {
+      sections: Array.from({ length: 10 }, (_, order) => ({
+        id: `part-${order}`,
+        title: `Partie ${order}`,
+        order,
+        estimatedWords: 1400,
+        keyPoints: ['Contexte du projet', 'Analyse des résultats', 'Limites de la méthode'],
+      })),
+      totalEstimatedWords: 14000,
+      totalEstimatedPages: 50,
+    }
+    const sectionText = Array.from({ length: 1200 }, (_, index) => `mot${index}`).join(' ')
+    let call = 0
+    const firstFetch = vi.fn(async () => {
+      call++
+      if (call === 1) return chatCompletion(JSON.stringify(outline))
+      if (call === 2) return chatCompletion(sectionText)
+      return { ok: false, status: 429, headers: new Headers() } as Response
+    })
+    vi.stubGlobal('fetch', firstFetch)
+    let checkpoint: ReportGenerationCheckpoint | undefined
+
+    await expect(generateLongReportForProject(project, project.brief ?? '', 50, undefined, {
+      onCheckpoint: (saved) => { checkpoint = saved },
+    })).rejects.toMatchObject({ status: 429 })
+    expect(checkpoint?.sections).toHaveLength(1)
+    expect(parseReportGenerationCheckpoint(checkpoint)).not.toBeNull()
+
+    const resumedFetch = vi.fn(async () => chatCompletion(sectionText))
+    vi.stubGlobal('fetch', resumedFetch)
+    const result = await generateLongReportForProject(project, project.brief ?? '', 50, undefined, {
+      checkpoint,
+      onCheckpoint: (saved) => { checkpoint = saved },
+    })
+    expect(result.content).toHaveLength(10)
+    expect(resumedFetch).toHaveBeenCalledTimes(9)
+    expect(result.inputTokens).toBe(10 * 111)
+    expect(checkpoint?.sections).toHaveLength(10)
+  })
+
+  it('retries once when a rate limit provides a short Retry-After window', async () => {
+    process.env.LLM_API_KEY = 'test-key'
+    process.env.LLM_BASE_URL = 'https://openrouter.ai/api/v1'
+    process.env.LLM_REPORT_MODEL = 'openrouter/free'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: new Headers({ 'retry-after': '0' }) } as Response)
+      .mockResolvedValueOnce(chatCompletion('Une synthèse académique complète qui expose le contexte du projet, la problématique, les objectifs et la méthode à suivre.'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generateSummaryForProject(project)
+    expect(result.content).toContain('synthèse')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('uses a canonical outline when the free router spends its output on reasoning', async () => {

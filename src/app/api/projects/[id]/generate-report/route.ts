@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
+import { createHash } from 'node:crypto'
 
 import { db } from '@/lib/db'
 import { createNotification } from '@/lib/notifications'
 import { getAuthenticatedUser } from '@/lib/auth'
-import { generateLongReportForProject, isLlmConfigured } from '@/lib/report-generation'
+import { generateLongReportForProject, isLlmConfigured, parseReportGenerationCheckpoint } from '@/lib/report-generation'
+import type { GenerationProject, ReportGenerationCheckpoint } from '@/lib/report-generation'
 import { publicLlmFailureMessage } from '@/lib/llm-errors'
 import { buildReportOutline, resolveEntitlements } from '@/lib/entitlements'
 import { consumeQuota, QuotaExceededError, refundQuota, usagePeriod } from '@/lib/entitlements-server'
@@ -51,16 +53,55 @@ export async function POST(
     )
   }
 
-  let sourceChunks: Array<{ content: string }>
+  let generationContext: GenerationProject
+  let summaryContent: string
+  let checkpointHash: string
+  let resumeCheckpoint: ReportGenerationCheckpoint | undefined
   let job: { id: string }
+  const summary = project.summaries[0]
+  const targetPages = Math.min(Math.max(Math.trunc(Number(process.env.REPORT_TARGET_PAGES ?? 50)) || 50, 10), 120)
   try {
-    sourceChunks = await db.embedding.findMany({
+    const sourceChunks = await db.embedding.findMany({
       where: { projectId: id },
       orderBy: { chunkIndex: 'asc' },
       take: 30,
       select: { content: true },
     })
 
+    generationContext = {
+      title: project.title,
+      brief: project.brief,
+      academicLevel: project.academicLevel,
+      university: project.university,
+      field: project.field,
+      language: project.language,
+      sourceNames: project.documents.map((document) => document.originalName),
+      sourceExcerpts: sourceChunks.map((chunk) => chunk.content),
+      structuredBrief: project.briefs[0]?.content,
+    }
+    summaryContent = summary?.content ?? project.brief ?? project.title
+    checkpointHash = createHash('sha256').update(JSON.stringify({ generationContext, summaryContent, targetPages })).digest('hex')
+
+    const priorJobs = await db.generationJob.findMany({
+      where: { userId: user.id, projectId: id, type: 'report', status: 'FAILED', outputData: { not: null } },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      select: { outputData: true },
+    })
+    for (const prior of priorJobs) {
+      try {
+        const saved = JSON.parse(prior.outputData ?? '')
+        if (saved?.kind !== 'report-checkpoint' || saved.version !== 1 || saved.contextHash !== checkpointHash) continue
+        const parsed = parseReportGenerationCheckpoint(saved.checkpoint)
+        if (parsed) {
+          resumeCheckpoint = parsed
+          break
+        }
+      } catch { /* Ignore older or malformed job output. */ }
+    }
+
+    const completed = resumeCheckpoint?.sections.length ?? 0
+    const total = resumeCheckpoint?.outline.sections.length ?? 0
     job = await db.generationJob.create({
       data: {
         id: uuidv4(),
@@ -68,8 +109,9 @@ export async function POST(
         projectId: id,
         type: 'report',
         status: 'PROCESSING',
-        progress: 10,
-        progressMessage: 'Planification du rapport en cours…',
+        progress: completed && total ? Math.min(95, 15 + Math.round((completed / total) * 80)) : 10,
+        progressMessage: completed ? `Reprise du rapport à la section ${completed + 1}/${total}…` : 'Planification du rapport en cours…',
+        outputData: resumeCheckpoint ? JSON.stringify({ kind: 'report-checkpoint', version: 1, contextHash: checkpointHash, checkpoint: resumeCheckpoint }) : null,
         startedAt: new Date(),
       },
     })
@@ -80,21 +122,6 @@ export async function POST(
     return NextResponse.json({ error: 'La génération du rapport a échoué', code: 'GENERATION_SETUP_FAILED' }, { status: 500 })
   }
 
-  const summary = project.summaries[0]
-  const targetPages = Math.min(Math.max(Math.trunc(Number(process.env.REPORT_TARGET_PAGES ?? 50)) || 50, 10), 120)
-  const generationContext = {
-    title: project.title,
-    brief: project.brief,
-    academicLevel: project.academicLevel,
-    university: project.university,
-    field: project.field,
-    language: project.language,
-    sourceNames: project.documents.map((document) => document.originalName),
-    sourceExcerpts: sourceChunks.map((chunk) => chunk.content),
-    structuredBrief: project.briefs[0]?.content,
-  }
-  const summaryContent = summary?.content ?? project.brief ?? project.title
-
   // The ~50-page pipeline issues 14-22 LLM calls and takes tens of minutes:
   // answer immediately with the job id and keep generating in the background
   // so the client can follow live progress through GET /api/jobs/[id].
@@ -104,21 +131,23 @@ export async function POST(
         generationContext,
         summaryContent,
         targetPages,
-        async (progress) => {
-          try {
-            const updated = await db.generationJob.updateMany({
-              where: { id: job.id, status: 'PROCESSING' },
-              data: {
-                progress: Math.min(95, 15 + Math.round((progress.current / progress.total) * 80)),
-                progressMessage: `Rédaction (${progress.current}/${progress.total}) : ${progress.sectionTitle} — ${progress.wordsSoFar.toLocaleString('fr-FR')} mots écrits`,
-              },
-            })
-            if (updated.count !== 1) throw new JobExpiredError('Generation job is no longer active')
-          } catch (error) {
-            if (error instanceof JobExpiredError) throw error
-            // Progress updates are best-effort; never abort the generation for them.
-          }
-        },
+        undefined,
+        { checkpoint: resumeCheckpoint, onCheckpoint: async (checkpoint) => {
+          const current = checkpoint.sections.length
+          const total = checkpoint.outline.sections.length
+          const words = checkpoint.sections.reduce((sum, section) => sum + section.content.split(/\s+/).filter(Boolean).length, 0)
+          const updated = await db.generationJob.updateMany({
+            where: { id: job.id, status: 'PROCESSING' },
+            data: {
+              progress: current ? Math.min(95, 15 + Math.round((current / total) * 80)) : 10,
+              progressMessage: current
+                ? `Rédaction (${current}/${total}) : ${checkpoint.sections.at(-1)?.title} — ${words.toLocaleString('fr-FR')} mots écrits`
+                : 'Plan du rapport enregistré. Rédaction en cours…',
+              outputData: JSON.stringify({ kind: 'report-checkpoint', version: 1, contextHash: checkpointHash, checkpoint }),
+            },
+          })
+          if (updated.count !== 1) throw new JobExpiredError('Generation job is no longer active')
+        } },
       )
 
       const fullContent = generated.content

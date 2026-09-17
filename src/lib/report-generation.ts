@@ -189,15 +189,27 @@ async function callLLM(input: {
     ...(openRouterHost && jsonMode === 'schema' ? { provider: { require_parameters: true } } : {}),
   }
 
-  const response = await fetch(`${llmBaseUrl()}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  })
+  let response: Response
+  for (let attempt = 0; ; attempt++) {
+    response = await fetch(`${llmBaseUrl()}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    const retryAfter = response.headers.get('retry-after')
+    const seconds = retryAfter === null ? NaN : Number(retryAfter)
+    const delayMs = Number.isFinite(seconds)
+      ? seconds * 1_000
+      : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN
+    // Retry only when the provider explicitly supplies a short reset window.
+    // Blind retries can consume a free account's daily request allowance.
+    if (response.status !== 429 || attempt > 0 || !Number.isFinite(delayMs) || delayMs < 0 || delayMs > 60_000) break
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
 
   if (!response.ok) {
     const requestId = response.headers.get('x-request-id')
@@ -710,26 +722,65 @@ export interface LongReportProgress {
   wordsSoFar: number
 }
 
+export interface ReportGenerationCheckpoint {
+  outline: ReportOutline
+  sections: ReportSection[]
+  inputTokens: number
+  outputTokens: number
+}
+
+const checkpointSchema = z.object({
+  outline: outlineSchema,
+  sections: z.array(z.object({
+    id: z.string().min(1).max(80),
+    title: z.string().min(1).max(200),
+    content: z.string().min(100).max(60_000),
+    status: z.literal('completed'),
+    order: z.number().int().min(0).max(30),
+  }).strict()).max(25),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+}).strict()
+
+export function parseReportGenerationCheckpoint(value: unknown): ReportGenerationCheckpoint | null {
+  const parsed = checkpointSchema.safeParse(value)
+  if (!parsed.success) return null
+  const { outline, sections } = parsed.data
+  if (sections.length > outline.sections.length) return null
+  if (sections.some((section, index) => section.id !== outline.sections[index].id ||
+    section.title !== outline.sections[index].title || section.order !== outline.sections[index].order)) return null
+  return parsed.data
+}
+
 export async function generateLongReportForProject(
   project: GenerationProject,
   summary: string,
   targetPages = 50,
   onProgress?: (progress: LongReportProgress) => Promise<void> | void,
+  options?: {
+    checkpoint?: ReportGenerationCheckpoint
+    onCheckpoint?: (checkpoint: ReportGenerationCheckpoint) => Promise<void> | void
+  },
 ): Promise<GenerationResult<ReportSection[]>> {
-  const outline = await generateReportOutline(project, summary, targetPages)
-  const sections: ReportSection[] = []
-  let totalInput = 0
-  let totalOutput = 0
-  let recap = ''
-  let words = 0
+  const resumed = options?.checkpoint ? parseReportGenerationCheckpoint(options.checkpoint) : null
+  const outline = resumed?.outline ?? await generateReportOutline(project, summary, targetPages)
+  const sections: ReportSection[] = [...(resumed?.sections ?? [])]
+  let totalInput = resumed?.inputTokens ?? 0
+  let totalOutput = resumed?.outputTokens ?? 0
+  let words = sections.reduce((sum, section) => sum + section.content.split(/\s+/).filter(Boolean).length, 0)
+  const previous = sections.at(-1)
+  let recap = previous ? '# ' + previous.title + '\n' + previous.content.slice(0, 3_000) : ''
 
-  for (let i = 0; i < outline.sections.length; i++) {
+  if (!resumed) await options?.onCheckpoint?.({ outline, sections: [], inputTokens: 0, outputTokens: 0 })
+
+  for (let i = sections.length; i < outline.sections.length; i++) {
     const { section, tokens } = await generateLongSection(project, outline, summary, i, recap, words)
     sections.push(section)
     totalInput += tokens.input
     totalOutput += tokens.output
     words += Math.round(section.content.split(/\s+/).length)
     recap = '# ' + section.title + '\n' + section.content.slice(0, 3_000)
+    await options?.onCheckpoint?.({ outline, sections: [...sections], inputTokens: totalInput, outputTokens: totalOutput })
     await onProgress?.({ current: i + 1, total: outline.sections.length, sectionTitle: section.title, wordsSoFar: words })
   }
 
