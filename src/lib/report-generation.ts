@@ -42,7 +42,7 @@ const reportResponseSchema = z.object({
 
 interface ChatCompletionResponse {
   model?: string
-  choices?: Array<{ message?: { content?: string | null } }>
+  choices?: Array<{ finish_reason?: string | null; message?: { content?: string | null } }>
   usage?: {
     prompt_tokens?: number
     completion_tokens?: number
@@ -56,6 +56,13 @@ interface LlmCompletion {
   model: string
   inputTokens: number
   outputTokens: number
+}
+
+class EmptyLlmResponseError extends Error {
+  constructor(model: string, finishReason: string | null) {
+    super(`The model returned no text output (model ${model}, finish reason ${finishReason ?? 'unknown'})`)
+    this.name = 'EmptyLlmResponseError'
+  }
 }
 
 const DEFAULT_LLM_BASE_URL = 'https://openrouter.ai/api/v1'
@@ -110,15 +117,22 @@ function isOfficialOpenAiHost() {
   }
 }
 
+function isOpenRouterHost() {
+  try {
+    return new URL(llmBaseUrl()).host === 'openrouter.ai'
+  } catch {
+    return false
+  }
+}
+
 type JsonMode = 'schema' | 'object' | 'off'
 
 function resolveJsonMode(): JsonMode {
   const configured = process.env.OPENAI_JSON_MODE?.trim().toLowerCase()
   if (configured === 'schema' || configured === 'object' || configured === 'off') return configured
-  // Official OpenAI supports strict json_schema responses. OpenAI-compatible
-  // providers (Groq, OpenRouter, Google Gemini, Ollama, LM Studio, ...) are far
-  // more reliably served by plain json_object plus a prompt contract.
-  return isOfficialOpenAiHost() ? 'schema' : 'object'
+  // OpenRouter routes schema requests to models that support structured output.
+  // Other compatible providers keep the broader json_object mode by default.
+  return isOfficialOpenAiHost() || isOpenRouterHost() ? 'schema' : 'object'
 }
 
 function parseJsonPayload(text: string): unknown {
@@ -147,6 +161,8 @@ async function callLLM(input: {
   const model = process.env.LLM_REPORT_MODEL?.trim() || process.env.OPENAI_REPORT_MODEL?.trim() || DEFAULT_LLM_MODEL
   const timeoutMs = Number(process.env.LLM_TIMEOUT_MS ?? process.env.OPENAI_TIMEOUT_MS ?? 120_000)
   const officialHost = isOfficialOpenAiHost()
+  const openRouterHost = isOpenRouterHost()
+  const freeRouter = openRouterHost && model === 'openrouter/free'
   const jsonMode: JsonMode = input.jsonSchema ? resolveJsonMode() : 'off'
 
   const body: Record<string, unknown> = {
@@ -169,6 +185,8 @@ async function callLLM(input: {
         }
       : {}),
     ...(jsonMode === 'object' ? { response_format: { type: 'json_object' } } : {}),
+    ...(freeRouter ? { reasoning: { effort: 'low' } } : {}),
+    ...(openRouterHost && jsonMode === 'schema' ? { provider: { require_parameters: true } } : {}),
   }
 
   const response = await fetch(`${llmBaseUrl()}/chat/completions`, {
@@ -187,8 +205,9 @@ async function callLLM(input: {
   }
 
   const completion = (await response.json()) as ChatCompletionResponse
-  const text = completion.choices?.[0]?.message?.content
-  if (!text) throw new Error('The model returned no text output')
+  const choice = completion.choices?.[0]
+  const text = choice?.message?.content
+  if (!text?.trim()) throw new EmptyLlmResponseError(completion.model || model, choice?.finish_reason ?? null)
 
   return {
     text,
@@ -410,7 +429,69 @@ const SECTION_STYLE_GUIDE = `Style requirements (mandatory):
 - Formal academic French register (or English if the project language is English).`
 
 
-const SECTION_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"content":"Substantive Markdown body at the requested length"}]}. Rules: exactly one section; content is substantive academic Markdown prose. Do not include id, title, order or status; the application sets them from the outline.'
+function sectionMarkdownFromCompletion(text: string): string {
+  const cleaned = text.trim().replace(/^```(?:markdown|md)?\s*/i, '').replace(/```\s*$/, '').trim()
+  if (cleaned.startsWith('{')) {
+    return sectionOnlySchema.parse(parseJsonPayload(cleaned)).sections[0].content.trim()
+  }
+  return cleaned
+}
+
+// An outline is planning metadata. If a free model produces no usable outline,
+// this structure still lets the hosted API write every paragraph of the report.
+const FALLBACK_OUTLINE_TITLES: Array<[string, string, string]> = [
+  ['introduction', 'Introduction générale', 'General introduction'],
+  ['organisme', "Présentation de l’organisme d’accueil", 'Host organization'],
+  ['contexte', 'Contexte du stage et domaine métier', 'Internship and domain context'],
+  ['problematique', 'Problématique du projet', 'Project problem statement'],
+  ['objectifs', 'Objectifs et périmètre', 'Objectives and scope'],
+  ['existant', 'Étude de l’existant', 'Review of the existing system'],
+  ['etat-art', 'Approches et technologies pertinentes', 'Relevant approaches and technologies'],
+  ['methodologie', 'Méthodologie du projet', 'Project methodology'],
+  ['besoins-fonctionnels', 'Analyse des besoins fonctionnels', 'Functional requirements'],
+  ['besoins-non-fonctionnels', 'Analyse des besoins non fonctionnels', 'Nonfunctional requirements'],
+  ['scenarios', 'Scénarios et cas d’utilisation', 'Scenarios and use cases'],
+  ['architecture', 'Architecture générale de la solution', 'Solution architecture'],
+  ['donnees', 'Modélisation des données et interactions', 'Data and interaction modeling'],
+  ['interfaces', 'Conception des interfaces', 'Interface design'],
+  ['choix-techniques', 'Choix techniques et justification', 'Technical choices and rationale'],
+  ['realisation', 'Réalisation et implémentation', 'Implementation'],
+  ['tests', 'Stratégie de test', 'Testing strategy'],
+  ['validation', 'Résultats et validation', 'Results and validation'],
+  ['limites', 'Discussion et limites', 'Discussion and limitations'],
+  ['conclusion', 'Conclusion générale et perspectives', 'General conclusion and future work'],
+  ['bibliographie', 'Bibliographie et webographie', 'References'],
+  ['annexes', 'Annexes', 'Appendices'],
+]
+
+function fallbackReportOutline(project: GenerationProject, targetPages: number): ReportOutline {
+  const count = Math.min(22, Math.max(10, Math.round(targetPages / 3)))
+  const required = [0, 7, 11, 15, 16, 17, 18, 19, 20, 21]
+  const additional = [1, 3, 4, 5, 8, 9, 10, 12, 13, 14, 2, 6]
+  const selected = [...required, ...additional.slice(0, count - required.length)].sort((a, b) => a - b)
+  const targetWords = targetPages * 280
+  const wordsForMainSection = Math.max(250, Math.min(1_600, Math.round((targetWords - 500) / (count - 2))))
+  const french = project.language === 'fr'
+  const sections = selected.map((templateIndex, order) => {
+    const [id, frenchTitle, englishTitle] = FALLBACK_OUTLINE_TITLES[templateIndex]
+    const title = french ? frenchTitle : englishTitle
+    const references = templateIndex === 20
+    const annexes = templateIndex === 21
+    const keyPoints = references
+      ? french
+        ? ['Sources réellement fournies', 'Références vérifiables', 'Références manquantes à signaler']
+        : ['Sources actually supplied', 'Verifiable references', 'Missing references to flag']
+      : annexes
+        ? french
+          ? ['Documents et schémas disponibles', 'Éléments complémentaires vérifiables', 'Données manquantes à signaler']
+          : ['Available documents and diagrams', 'Verifiable supplementary material', 'Missing material to flag']
+        : french
+          ? [title, 'Faits confirmés par le contexte fourni', 'Démarche, résultats et limites vérifiables']
+          : [title, 'Facts supported by the supplied context', 'Verifiable methods, outcomes and limitations']
+    return { id, title, order, estimatedWords: references || annexes ? 250 : wordsForMainSection, keyPoints }
+  })
+  return { sections, totalEstimatedWords: targetWords, totalEstimatedPages: targetPages }
+}
 
 /**
  * PASS 1 — Generate a detailed outline for a long (~50-page) report.
@@ -461,7 +542,10 @@ ${summary.slice(0, 20_000)}`
 
   let outline: z.infer<typeof outlineSchema> | undefined
   let lastOutlineError: unknown
-  for (let attempt = 1; attempt <= 3 && !outline; attempt++) {
+  let fallbackEligible = false
+  const freeRouter = isOpenRouterHost() && (process.env.LLM_REPORT_MODEL?.trim() || process.env.OPENAI_REPORT_MODEL?.trim() || DEFAULT_LLM_MODEL) === 'openrouter/free'
+  const maxOutlineAttempts = freeRouter ? 2 : 3
+  for (let attempt = 1; attempt <= maxOutlineAttempts && !outline; attempt++) {
     const attemptPrompt = attempt === 1
       ? prompt
       : `${prompt}\n\nCRITICAL: your previous response was not parseable JSON (${lastOutlineError instanceof Error ? lastOutlineError.message.slice(0, 200) : 'unknown error'}). Output the COMPLETE JSON object only - no prose, no Markdown fences, no truncation; close every bracket and every string.`
@@ -471,18 +555,24 @@ ${summary.slice(0, 20_000)}`
     } catch (error) {
       if (isNonRetryableLlmError(error)) throw error
       lastOutlineError = error
-      console.error(`[report-generation] outline attempt ${attempt}/3 call failed: ${error instanceof Error ? error.message : error}`)
+      fallbackEligible = error instanceof EmptyLlmResponseError
+      console.error(`[report-generation] outline attempt ${attempt}/${maxOutlineAttempts} call failed: ${error instanceof Error ? error.message : error}`)
       continue
     }
     try {
       outline = outlineSchema.parse(parseJsonPayload(completion.text))
     } catch (error) {
       lastOutlineError = error
-      console.error(`[report-generation] outline attempt ${attempt}/3 rejected: ${error instanceof Error ? error.message.slice(0, 300) : error} | raw head: ${completion.text.slice(0, 200).replace(/\n/g, ' ')}`)
+      fallbackEligible = true
+      console.error(`[report-generation] outline attempt ${attempt}/${maxOutlineAttempts} rejected: ${error instanceof Error ? error.message.slice(0, 300) : error}`)
     }
   }
   if (!outline) {
-    throw new Error(`The report outline could not be generated after 3 attempts (${lastOutlineError instanceof Error ? lastOutlineError.message.slice(0, 200) : 'unknown error'})`)
+    if (!fallbackEligible) {
+      throw new Error(`The report outline could not be generated after ${maxOutlineAttempts} attempts (${lastOutlineError instanceof Error ? lastOutlineError.message.slice(0, 200) : 'unknown error'})`)
+    }
+    console.warn(`[report-generation] using the canonical outline after ${maxOutlineAttempts} unusable model outputs`)
+    outline = outlineSchema.parse(fallbackReportOutline(project, targetPages))
   }
   const targetWords = targetPages * 280
   const estimatedTotal = outline.sections.reduce((sum, section) => sum + section.estimatedWords, 0)
@@ -508,7 +598,7 @@ async function generateLongSection(
   const remaining = outline.sections.length - index - 1
   const minWords = Math.max(200, Math.round(target.estimatedWords * 0.82))
   const system = `You are an expert academic writer. Write section ${index + 1} of ${outline.sections.length} ("${target.title}") of a ${outline.totalEstimatedPages}-page internship report in ${project.language === 'fr' ? 'French' : 'English'}. ${TRUST_BOUNDARY}`
-  const prompt = `Write ONLY the content for this section as valid JSON ("sections" array with exactly one entry containing "content"):
+  const prompt = `Write ONLY the body of this section as Markdown prose. Do not return JSON, an outer title or a code fence:
 - section id for context: ${target.id}
 - section title for context: ${target.title}
 - target length: ~${target.estimatedWords} words (write at least ${minWords} words)
@@ -523,91 +613,69 @@ PREVIOUS SECTION RECAP (for continuity):
 ${previousRecap.slice(0, 4_000) || '(first section)'}
 
 WORDS SO FAR: ${accumulatedWords} — REMAINING SECTIONS: ${remaining}
-${SECTION_JSON_CONTRACT}
 
 PROJECT_CONTEXT_JSON:
 ${safeProjectContext(project)}
 
 UNTRUSTED_SYNTHESIS:
 ${summary.slice(0, 20_000)}`
-  const sectionJsonSchema: Record<string, unknown> = {
-    type: 'object',
-    additionalProperties: false,
-    required: ['sections'],
-    properties: {
-      sections: {
-        type: 'array',
-        minItems: 1,
-        maxItems: 1,
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['content'],
-          properties: {
-            content: { type: 'string', minLength: 100, maxLength: 60000 },
-          },
-        },
-      },
-    },
-  }
-
-  let parsed: z.infer<typeof sectionOnlySchema> | undefined
-  let draft: z.infer<typeof sectionOnlySchema> | undefined
+  let parsed: string | undefined
+  let draft: string | undefined
   let lastSectionError: unknown
   let sectionTokens = { input: 0, output: 0 }
-  for (let attempt = 1; attempt <= 3 && !parsed; attempt++) {
+  for (let attempt = 1; attempt <= 4 && !parsed; attempt++) {
     const continuing = Boolean(draft)
-    const neededWords = draft ? Math.max(120, Math.min(500, target.estimatedWords - draft.sections[0].content.split(/\s+/).filter(Boolean).length)) : 0
+    const neededWords = draft ? Math.max(120, Math.min(500, target.estimatedWords - draft.split(/\s+/).filter(Boolean).length)) : 0
     const attemptPrompt = continuing
-      ? `Continue the existing academic report section with about ${neededWords} NEW words of substantive Markdown prose in ${project.language === 'fr' ? 'French' : 'English'}. Return only the additional paragraphs: no title, no JSON, no code fence, no repeated sentences. Develop the section's stated points using only the provided facts; do not invent citations, figures, experiments or results.\n\nSECTION_TITLE: ${target.title}\nKEY_POINTS_JSON: ${JSON.stringify(target.keyPoints)}\nPROJECT_CONTEXT_JSON: ${safeProjectContext(project)}\nUNTRUSTED_EXISTING_SECTION_TAIL:\n${draft!.sections[0].content.slice(-4_000)}`
+      ? `Continue the existing academic report section with about ${neededWords} NEW words of substantive Markdown prose in ${project.language === 'fr' ? 'French' : 'English'}. Return only the additional paragraphs: no title, no JSON, no code fence, no repeated sentences. Develop the section's stated points using only the provided facts; do not invent citations, figures, experiments or results.\n\nSECTION_TITLE: ${target.title}\nKEY_POINTS_JSON: ${JSON.stringify(target.keyPoints)}\nPROJECT_CONTEXT_JSON: ${safeProjectContext(project)}\nUNTRUSTED_EXISTING_SECTION_TAIL:\n${draft!.slice(-4_000)}`
       : attempt === 1
         ? prompt
-        : `${prompt}\n\nCORRECTION: the previous response was invalid (${lastSectionError instanceof Error ? lastSectionError.message.slice(0, 200) : 'unknown error'}). Output one complete JSON object with exactly one section containing "content" and substantive prose; close every bracket and string.`
+        : `${prompt}\n\nCORRECTION: the previous response was unusable (${lastSectionError instanceof Error ? lastSectionError.message.slice(0, 200) : 'unknown error'}). Return substantive Markdown paragraphs only.`
     let completion: LlmCompletion
     try {
       completion = await callLLM({
         system,
         prompt: attemptPrompt,
-        maxOutputTokens: continuing ? 2_000 : 8_000,
-        ...(continuing ? {} : { jsonSchema: sectionJsonSchema }),
+        maxOutputTokens: continuing ? 4_000 : 8_000,
       })
     } catch (error) {
       if (isNonRetryableLlmError(error)) throw error
       lastSectionError = error
-      console.error(`[report-generation] section "${target.title}" attempt ${attempt}/3 call failed: ${error instanceof Error ? error.message : error}`)
+      console.error(`[report-generation] section "${target.title}" attempt ${attempt}/4 call failed: ${error instanceof Error ? error.message : error}`)
       continue
     }
     sectionTokens.input += completion.inputTokens
     sectionTokens.output += completion.outputTokens
     try {
       if (draft) {
-        const addition = completion.text.trim().replace(/^```(?:markdown)?\s*/i, '').replace(/```\s*$/, '').trim()
-        if (addition.length < 100 || addition.startsWith('{') || draft.sections[0].content.includes(addition.slice(0, 120))) {
+        const addition = sectionMarkdownFromCompletion(completion.text)
+        if (addition.length < 100 || draft.includes(addition.slice(0, 120))) {
           throw new Error('The continuation was empty or repeated existing text')
         }
-        draft.sections[0].content += `\n\n${addition}`
+        draft += `\n\n${addition}`
       } else {
-        draft = sectionOnlySchema.parse(parseJsonPayload(completion.text))
+        draft = sectionMarkdownFromCompletion(completion.text)
+        if (draft.length < 100 || draft.length > 60_000) throw new Error('The section text has an invalid length')
       }
-      const candidateWords = draft.sections[0].content.split(/\s+/).filter(Boolean).length
+      const candidateWords = draft.split(/\s+/).filter(Boolean).length
       if (candidateWords < minWords) {
         throw new Error(`too short: ${candidateWords} words written, expected at least ${minWords}`)
       }
       parsed = draft
     } catch (error) {
       lastSectionError = error
-      console.error(`[report-generation] section "${target.title}" attempt ${attempt}/3 rejected: ${error instanceof Error ? error.message.slice(0, 300) : error}`)
+      console.error(`[report-generation] section "${target.title}" attempt ${attempt}/4 rejected: ${error instanceof Error ? error.message.slice(0, 300) : error}`)
     }
   }
   if (!parsed) {
-    throw new Error(`Section "${target.title}" could not be generated after 3 attempts (${lastSectionError instanceof Error ? lastSectionError.message.slice(0, 200) : 'unknown error'})`)
+    throw new Error(`Section "${target.title}" could not be generated after 4 attempts (${lastSectionError instanceof Error ? lastSectionError.message.slice(0, 200) : 'unknown error'})`)
   }
   return {
     section: {
       // Identity and ordering come from the validated outline, not model text.
       id: target.id,
       title: target.title,
-      content: parsed.sections[0].content,
+      content: parsed,
       status: 'completed',
       order: target.order,
     },

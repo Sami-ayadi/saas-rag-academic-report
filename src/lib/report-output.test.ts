@@ -193,7 +193,7 @@ describe('report generation and exports', () => {
     expect(body.messages[1].content).toContain('UNTRUSTED_REVISION_INPUT_JSON')
   })
 
-  it('extends a short section despite missing model metadata and an empty API response', async () => {
+  it('accepts Markdown and legacy JSON sections, and extends a short draft after empty responses', async () => {
     process.env.LLM_API_KEY = 'test-key'
     process.env.LLM_BASE_URL = 'https://llm.example.test/v1'
     process.env.LLM_REPORT_MODEL = 'openrouter/free'
@@ -218,12 +218,9 @@ describe('report generation and exports', () => {
       if (current === 1) return chatCompletion(JSON.stringify({
         sections: [{ id: 'wrong-id', title: 'Wrong title', order: 9, content: firstDraft }],
       }))
-      if (current === 2) return chatCompletion('')
-      if (current === 3) return chatCompletion(continuation)
-      const order = current - 3
-      return chatCompletion(JSON.stringify({
-        sections: [{ content: fullSection }],
-      }))
+      if (current === 2 || current === 3) return chatCompletion('')
+      if (current === 4) return chatCompletion(continuation)
+      return chatCompletion(fullSection)
     })
     vi.stubGlobal('fetch', fetchMock)
 
@@ -238,11 +235,14 @@ describe('report generation and exports', () => {
     expect(result.content[0].content.split(/\s+/)).toHaveLength(1200)
     expect(result.content[0].content).toContain('suite299')
     expect(progress).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-    expect(fetchMock).toHaveBeenCalledTimes(13)
+    expect(fetchMock).toHaveBeenCalledTimes(14)
     expect(result.inputTokens).toBe(11 * 111)
     expect(result.outputTokens).toBe(11 * 222)
-    const continuationBody = JSON.parse(fetchMock.mock.calls[3][1]?.body as string)
+    const firstSectionBody = JSON.parse(fetchMock.mock.calls[1][1]?.body as string)
+    expect(firstSectionBody.response_format).toBeUndefined()
+    const continuationBody = JSON.parse(fetchMock.mock.calls[4][1]?.body as string)
     expect(continuationBody.response_format).toBeUndefined()
+    expect(continuationBody.max_tokens).toBe(4000)
   })
 
   it('stops after a provider payment error and exposes a safe, useful failure message', async () => {
@@ -264,5 +264,27 @@ describe('report generation and exports', () => {
     expect(message).toContain('crédits')
     expect(publicReportFailureMessage(message)).toBe(message)
     expect(publicReportFailureMessage('raw model output')).toBe('Échec de la génération du rapport')
+  })
+
+  it('uses a canonical outline when the free router spends its output on reasoning', async () => {
+    process.env.LLM_API_KEY = 'test-key'
+    process.env.LLM_BASE_URL = 'https://openrouter.ai/api/v1'
+    process.env.LLM_REPORT_MODEL = 'openrouter/free'
+    delete process.env.OPENAI_JSON_MODE
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => chatCompletion(''))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const outline = await generateReportOutline(project, project.brief ?? '', 50)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(outline.sections).toHaveLength(17)
+    expect(outline.sections[0]).toMatchObject({ id: 'introduction', order: 0 })
+    expect(outline.sections.some((section) => section.id === 'tests')).toBe(true)
+    expect(outline.sections.some((section) => section.id === 'conclusion')).toBe(true)
+    expect(outline.totalEstimatedWords).toBe(14000)
+    const request = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
+    expect(request.response_format.type).toBe('json_schema')
+    expect(request.provider.require_parameters).toBe(true)
+    expect(request.reasoning.effort).toBe('low')
   })
 })
