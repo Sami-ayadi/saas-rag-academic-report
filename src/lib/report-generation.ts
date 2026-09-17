@@ -1,5 +1,6 @@
 ﻿import { z } from 'zod/v4'
 
+import { isNonRetryableLlmError, LlmHttpError } from './llm-errors'
 import type { ReportSection } from './types'
 
 export interface GenerationProject {
@@ -182,7 +183,7 @@ async function callLLM(input: {
 
   if (!response.ok) {
     const requestId = response.headers.get('x-request-id')
-    throw new Error(`LLM generation failed (${response.status}${requestId ? `, request ${requestId}` : ''})`)
+    throw new LlmHttpError(response.status, requestId)
   }
 
   const completion = (await response.json()) as ChatCompletionResponse
@@ -379,16 +380,12 @@ const sectionOnlySchema = z.object({
   sections: z
     .array(
       z.object({
-        id: z.string().min(1).max(80),
-        title: z.string().min(1).max(200),
-        content: z.string().min(500).max(60_000),
-        status: z.string().max(40).transform(() => 'completed' as const),
-        order: z.number().int().min(0).max(30),
+        content: z.string().min(100).max(60_000),
       }),
     )
     .min(1)
     .max(1),
-}).strict()
+})
 
 const OUTLINE_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"id":"introduction","title":"Introduction","order":0,"estimatedWords":900,"keyPoints":["Contexte du stage","Problématique","Objectifs","Plan du rapport"]}],"totalEstimatedWords":14000,"totalEstimatedPages":50}. Rules: 10 to 25 sections, approximately 280 words per page; section lengths should sum to the requested word target; order is consecutive starting at 0; keyPoints 3-6 items.'
 
@@ -413,7 +410,7 @@ const SECTION_STYLE_GUIDE = `Style requirements (mandatory):
 - Formal academic French register (or English if the project language is English).`
 
 
-const SECTION_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"id":"introduction","title":"Introduction","content":"Substantive Markdown body at the requested length","status":"completed","order":0}]}. Rules: exactly one section; content is substantive academic Markdown prose.'
+const SECTION_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"content":"Substantive Markdown body at the requested length"}]}. Rules: exactly one section; content is substantive academic Markdown prose. Do not include id, title, order or status; the application sets them from the outline.'
 
 /**
  * PASS 1 — Generate a detailed outline for a long (~50-page) report.
@@ -472,6 +469,7 @@ ${summary.slice(0, 20_000)}`
     try {
       completion = await callLLM({ system, prompt: attemptPrompt, maxOutputTokens: 8_000, jsonSchema: outlineJsonSchema })
     } catch (error) {
+      if (isNonRetryableLlmError(error)) throw error
       lastOutlineError = error
       console.error(`[report-generation] outline attempt ${attempt}/3 call failed: ${error instanceof Error ? error.message : error}`)
       continue
@@ -510,10 +508,9 @@ async function generateLongSection(
   const remaining = outline.sections.length - index - 1
   const minWords = Math.max(200, Math.round(target.estimatedWords * 0.82))
   const system = `You are an expert academic writer. Write section ${index + 1} of ${outline.sections.length} ("${target.title}") of a ${outline.totalEstimatedPages}-page internship report in ${project.language === 'fr' ? 'French' : 'English'}. ${TRUST_BOUNDARY}`
-  const prompt = `Write ONLY this section as valid JSON ("sections" array with exactly one entry):
-- id: ${target.id}
-- title: ${target.title}
-- order: ${target.order}
+  const prompt = `Write ONLY the content for this section as valid JSON ("sections" array with exactly one entry containing "content"):
+- section id for context: ${target.id}
+- section title for context: ${target.title}
 - target length: ~${target.estimatedWords} words (write at least ${minWords} words)
 - mandatory points: ${target.keyPoints.join('; ')}
 
@@ -545,13 +542,9 @@ ${summary.slice(0, 20_000)}`
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['id', 'title', 'content', 'status', 'order'],
+          required: ['content'],
           properties: {
-            id: { type: 'string', minLength: 1, maxLength: 80 },
-            title: { type: 'string', minLength: 1, maxLength: 200 },
-            content: { type: 'string', minLength: 500, maxLength: 60000 },
-            status: { type: 'string', enum: ['completed'] },
-            order: { type: 'integer', minimum: 0, maximum: 30 },
+            content: { type: 'string', minLength: 100, maxLength: 60000 },
           },
         },
       },
@@ -569,7 +562,7 @@ ${summary.slice(0, 20_000)}`
       ? `Continue the existing academic report section with about ${neededWords} NEW words of substantive Markdown prose in ${project.language === 'fr' ? 'French' : 'English'}. Return only the additional paragraphs: no title, no JSON, no code fence, no repeated sentences. Develop the section's stated points using only the provided facts; do not invent citations, figures, experiments or results.\n\nSECTION_TITLE: ${target.title}\nKEY_POINTS_JSON: ${JSON.stringify(target.keyPoints)}\nPROJECT_CONTEXT_JSON: ${safeProjectContext(project)}\nUNTRUSTED_EXISTING_SECTION_TAIL:\n${draft!.sections[0].content.slice(-4_000)}`
       : attempt === 1
         ? prompt
-        : `${prompt}\n\nCORRECTION: the previous response was invalid (${lastSectionError instanceof Error ? lastSectionError.message.slice(0, 200) : 'unknown error'}). Output one complete JSON object with exactly one section and substantive prose; close every bracket and string.`
+        : `${prompt}\n\nCORRECTION: the previous response was invalid (${lastSectionError instanceof Error ? lastSectionError.message.slice(0, 200) : 'unknown error'}). Output one complete JSON object with exactly one section containing "content" and substantive prose; close every bracket and string.`
     let completion: LlmCompletion
     try {
       completion = await callLLM({
@@ -579,6 +572,7 @@ ${summary.slice(0, 20_000)}`
         ...(continuing ? {} : { jsonSchema: sectionJsonSchema }),
       })
     } catch (error) {
+      if (isNonRetryableLlmError(error)) throw error
       lastSectionError = error
       console.error(`[report-generation] section "${target.title}" attempt ${attempt}/3 call failed: ${error instanceof Error ? error.message : error}`)
       continue
@@ -610,14 +604,12 @@ ${summary.slice(0, 20_000)}`
   }
   return {
     section: {
-      // Trust the outline's (already deduplicated) id: models occasionally
-      // echo a different id than requested, which would break React keys and
-      // per-section updates.
+      // Identity and ordering come from the validated outline, not model text.
       id: target.id,
-      title: parsed.sections[0].title,
+      title: target.title,
       content: parsed.sections[0].content,
       status: 'completed',
-      order: parsed.sections[0].order,
+      order: target.order,
     },
     tokens: sectionTokens,
   }

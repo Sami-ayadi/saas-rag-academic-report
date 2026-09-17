@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createReportExport } from './report-export'
-import { generateLongReportForProject, generateReportForProject, generateSummaryForProject, isLlmConfigured, reviseReportSection } from './report-generation'
+import { generateLongReportForProject, generateReportForProject, generateReportOutline, generateSummaryForProject, isLlmConfigured, reviseReportSection } from './report-generation'
+import { publicLlmFailureMessage, publicReportFailureMessage } from './llm-errors'
 import type { ReportSection } from './types'
 
 const originalEnv = {
@@ -192,7 +193,7 @@ describe('report generation and exports', () => {
     expect(body.messages[1].content).toContain('UNTRUSTED_REVISION_INPUT_JSON')
   })
 
-  it('extends a short long-report section and accounts for the extra API call', async () => {
+  it('extends a short section despite missing model metadata and an empty API response', async () => {
     process.env.LLM_API_KEY = 'test-key'
     process.env.LLM_BASE_URL = 'https://llm.example.test/v1'
     process.env.LLM_REPORT_MODEL = 'openrouter/free'
@@ -215,12 +216,13 @@ describe('report generation and exports', () => {
       const current = call++
       if (current === 0) return chatCompletion(JSON.stringify(outline))
       if (current === 1) return chatCompletion(JSON.stringify({
-        sections: [{ id: 'part-0', title: 'Partie 0', content: firstDraft, status: 'completed', order: 0 }],
+        sections: [{ id: 'wrong-id', title: 'Wrong title', order: 9, content: firstDraft }],
       }))
-      if (current === 2) return chatCompletion(continuation)
-      const order = current - 2
+      if (current === 2) return chatCompletion('')
+      if (current === 3) return chatCompletion(continuation)
+      const order = current - 3
       return chatCompletion(JSON.stringify({
-        sections: [{ id: `part-${order}`, title: `Partie ${order}`, content: fullSection, status: 'completed', order }],
+        sections: [{ content: fullSection }],
       }))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -231,13 +233,36 @@ describe('report generation and exports', () => {
     })
 
     expect(result.content).toHaveLength(10)
+    expect(result.content[0]).toMatchObject({ id: 'part-0', title: 'Partie 0', order: 0, status: 'completed' })
+    expect(result.content[9]).toMatchObject({ id: 'part-9', title: 'Partie 9', order: 9, status: 'completed' })
     expect(result.content[0].content.split(/\s+/)).toHaveLength(1200)
     expect(result.content[0].content).toContain('suite299')
     expect(progress).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-    expect(fetchMock).toHaveBeenCalledTimes(12)
+    expect(fetchMock).toHaveBeenCalledTimes(13)
     expect(result.inputTokens).toBe(11 * 111)
     expect(result.outputTokens).toBe(11 * 222)
-    const continuationBody = JSON.parse(fetchMock.mock.calls[2][1]?.body as string)
+    const continuationBody = JSON.parse(fetchMock.mock.calls[3][1]?.body as string)
     expect(continuationBody.response_format).toBeUndefined()
+  })
+
+  it('stops after a provider payment error and exposes a safe, useful failure message', async () => {
+    process.env.LLM_API_KEY = 'test-key'
+    process.env.LLM_BASE_URL = 'https://openrouter.ai/api/v1'
+    process.env.LLM_REPORT_MODEL = 'meta-llama/llama-3.3-70b-instruct'
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 402, headers: new Headers() } as Response))
+    vi.stubGlobal('fetch', fetchMock)
+
+    let failure: unknown
+    try {
+      await generateReportOutline(project, project.brief ?? '')
+    } catch (error) {
+      failure = error
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const message = publicLlmFailureMessage(failure)
+    expect(message).toContain('crédits')
+    expect(publicReportFailureMessage(message)).toBe(message)
+    expect(publicReportFailureMessage('raw model output')).toBe('Échec de la génération du rapport')
   })
 })

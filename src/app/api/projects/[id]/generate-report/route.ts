@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { createNotification } from '@/lib/notifications'
 import { getAuthenticatedUser } from '@/lib/auth'
 import { generateLongReportForProject, isLlmConfigured } from '@/lib/report-generation'
+import { publicLlmFailureMessage } from '@/lib/llm-errors'
 import { buildReportOutline, resolveEntitlements } from '@/lib/entitlements'
 import { consumeQuota, QuotaExceededError, refundQuota, usagePeriod } from '@/lib/entitlements-server'
 
@@ -187,7 +188,7 @@ export async function POST(
             where: { id: job.id, status: 'PROCESSING' },
             data: {
               status: 'FAILED',
-              progressMessage: 'Échec de la génération',
+              progressMessage: publicLlmFailureMessage(error) ?? 'Échec de la génération',
               errorMessage: error instanceof Error ? error.message.slice(0, 500) : 'Erreur inconnue',
               completedAt: new Date(),
             },

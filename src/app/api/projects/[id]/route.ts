@@ -4,6 +4,7 @@ import { z } from 'zod/v4';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input';
 import { resolveEntitlements } from '@/lib/entitlements';
+import { publicReportFailureMessage } from '@/lib/llm-errors';
 
 export const runtime = 'nodejs';
 
@@ -77,7 +78,7 @@ export async function GET(
       jobs: project.jobs.map((job) => ({
         ...job,
         progressMessage: !canViewOutline && job.type === 'report'
-          ? job.status === 'FAILED' ? 'Échec de la génération du rapport' : job.status === 'COMPLETED' ? 'Rapport généré' : 'Rédaction du rapport en cours…'
+          ? job.status === 'FAILED' ? publicReportFailureMessage(job.progressMessage) : job.status === 'COMPLETED' ? 'Rapport généré' : 'Rédaction du rapport en cours…'
           : job.progressMessage,
         outputData: canViewOutline ? job.outputData : null,
         errorMessage: null,

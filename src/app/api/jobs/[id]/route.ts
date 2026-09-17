@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { getAuthenticatedUser } from '@/lib/auth';
 import { refundQuota, usagePeriod } from '@/lib/entitlements-server';
 import { resolveEntitlements } from '@/lib/entitlements';
+import { publicReportFailureMessage } from '@/lib/llm-errors';
 
 export const runtime = 'nodejs';
 
@@ -79,7 +80,7 @@ export async function GET(
       job: {
         ...job,
         progressMessage: !canViewOutline && job.type === 'report'
-          ? job.status === 'FAILED' ? 'Échec de la génération du rapport' : job.status === 'COMPLETED' ? 'Rapport généré' : 'Rédaction du rapport en cours…'
+          ? job.status === 'FAILED' ? publicReportFailureMessage(job.progressMessage) : job.status === 'COMPLETED' ? 'Rapport généré' : 'Rédaction du rapport en cours…'
           : job.progressMessage,
         outputData: canViewOutline ? parsedOutputData : null,
         errorMessage: null,
