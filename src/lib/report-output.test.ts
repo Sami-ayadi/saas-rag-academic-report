@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createReportExport } from './report-export'
 import { generateLongReportForProject, generateReportForProject, generateReportOutline, generateSummaryForProject, isLlmConfigured, parseReportGenerationCheckpoint, reviseReportSection } from './report-generation'
 import type { ReportGenerationCheckpoint } from './report-generation'
-import { publicLlmFailureMessage, publicReportFailureMessage } from './llm-errors'
+import { LlmHttpError, publicLlmFailureMessage, publicReportFailureMessage } from './llm-errors'
 import type { ReportSection } from './types'
 
 const originalEnv = {
@@ -323,6 +323,17 @@ describe('report generation and exports', () => {
     const result = await generateSummaryForProject(project)
     expect(result.content).toContain('synthèse')
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('promises resume only when a rate-limited job saved sections', () => {
+    const rateLimit = new LlmHttpError(429, null)
+    const emptyMessage = publicLlmFailureMessage(rateLimit)
+    const resumableMessage = publicLlmFailureMessage(rateLimit, true)
+    expect(emptyMessage).toContain('renouvellement du quota')
+    expect(emptyMessage).not.toContain('sections enregistrées')
+    expect(resumableMessage).toContain('sections enregistrées')
+    expect(publicReportFailureMessage(emptyMessage)).toBe(emptyMessage)
+    expect(publicReportFailureMessage(resumableMessage)).toBe(resumableMessage)
   })
 
   it('uses a canonical outline when the free router spends its output on reasoning', async () => {

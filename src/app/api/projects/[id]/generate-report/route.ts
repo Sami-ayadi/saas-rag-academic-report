@@ -125,6 +125,7 @@ export async function POST(
   // The ~50-page pipeline issues 14-22 LLM calls and takes tens of minutes:
   // answer immediately with the job id and keep generating in the background
   // so the client can follow live progress through GET /api/jobs/[id].
+  let savedSectionCount = resumeCheckpoint?.sections.length ?? 0
   void (async () => {
     try {
       const generated = await generateLongReportForProject(
@@ -147,6 +148,7 @@ export async function POST(
             },
           })
           if (updated.count !== 1) throw new JobExpiredError('Generation job is no longer active')
+          savedSectionCount = current
         } },
       )
 
@@ -217,7 +219,7 @@ export async function POST(
             where: { id: job.id, status: 'PROCESSING' },
             data: {
               status: 'FAILED',
-              progressMessage: publicLlmFailureMessage(error) ?? 'Échec de la génération',
+              progressMessage: publicLlmFailureMessage(error, savedSectionCount > 0) ?? 'Échec de la génération',
               errorMessage: error instanceof Error ? error.message.slice(0, 500) : 'Erreur inconnue',
               completedAt: new Date(),
             },
