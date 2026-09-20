@@ -44,6 +44,7 @@ export interface ProjectFull {
   createdAt: Date;
   updatedAt: Date;
   documents: DocumentItem[];
+  reportPlans: ReportPlanItem[];
   summaries: SummaryItem[];
   reports: ReportItem[];
   jobs: GenerationJobItem[];
@@ -59,6 +60,38 @@ export interface DocumentItem {
   size: number;
   status: string;
   chunkCount: number;
+  role: 'PROJECT_EVIDENCE' | 'STRUCTURE_REFERENCE';
+  pageCount: number | null;
+  extractionError: string | null;
+  processedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ReportPlanSection {
+  id: string;
+  title: string;
+  keyPoints: string[];
+  estimatedWords: number;
+  order: number;
+  parentId?: string | null;
+  kind?: string;
+  requiredEvidenceTypes?: string[];
+}
+
+export interface ReportPlanContent {
+  totalEstimatedPages: number;
+  totalEstimatedWords: number;
+  sections: ReportPlanSection[];
+}
+
+export interface ReportPlanItem {
+  id: string;
+  version: number;
+  templateKey: string;
+  content: ReportPlanContent;
+  status: 'DRAFT' | 'APPROVED' | 'SUPERSEDED';
+  approvedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -95,6 +128,8 @@ export interface ReportItem {
   sections: string;
   status: string;
   wordCount: number;
+  qualityIssues?: Array<{ code: string; severity: 'blocking' | 'warning'; sectionId?: string; message: string }>;
+  approvedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -132,6 +167,7 @@ export interface UserWithStats {
   email: string;
   name: string | null;
   image: string | null;
+  university: string | null;
   tier: string;
   role: 'USER' | 'ADMIN';
   creditsUsed: number;

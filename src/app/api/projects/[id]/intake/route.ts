@@ -154,6 +154,14 @@ export async function POST(
           content: content as Prisma.InputJsonValue,
         },
       }),
+      db.reportPlan.updateMany({
+        where: { projectId: id, status: { in: ['DRAFT', 'APPROVED'] } },
+        data: { status: 'SUPERSEDED', approvedAt: null },
+      }),
+      db.project.update({
+        where: { id },
+        data: { status: 'BRIEF_APPROVED' },
+      }),
     ])
 
     return NextResponse.json({ brief }, { status: 201 })

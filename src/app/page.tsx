@@ -27,18 +27,18 @@ import type { PricingTier } from '@/lib/types'
 
 const features = [
   { icon: BrainCircuit, title: 'Cadrage intelligent', text: 'Un questionnaire guidé transforme votre stage, votre filière et vos objectifs en un brief académique exploitable.' },
-  { icon: LibraryBig, title: 'Sources maîtrisées', text: 'Importez vos documents et inspirez-vous de structures adaptées au droit, à la médecine, au cloud et à bien d’autres domaines.' },
+  { icon: LibraryBig, title: 'Sources maîtrisées', text: 'Importez vos preuves et séparez-les des exemples utilisés uniquement pour organiser le document.' },
   { icon: PencilLine, title: 'Édition par section', text: 'Relisez, corrigez et régénérez uniquement la partie qui doit évoluer sans perdre le reste du rapport.' },
-  { icon: FileDown, title: 'Exports prêts à remettre', text: 'Téléchargez votre travail en Markdown, Word ou PDF, avec une mise en page cohérente et professionnelle.' },
+  { icon: FileDown, title: 'Exports prêts à finaliser', text: 'Après votre validation, téléchargez un brouillon structuré en Markdown, Word ou PDF et effectuez votre dernière relecture.' },
   { icon: LockKeyhole, title: 'Contenu protégé', text: 'Les plans, données privées et fonctionnalités payantes sont contrôlés côté serveur, jamais uniquement dans l’interface.' },
-  { icon: Languages, title: 'Multi-domaine, multilingue', text: 'Une expérience adaptable à votre établissement, votre niveau académique, votre discipline et votre langue.' },
+  { icon: Languages, title: 'Contexte académique', text: 'Une expérience adaptée à votre établissement, votre niveau, votre discipline et la langue du rapport.' },
 ]
 
 const steps = [
   ['01', 'Décrivez votre stage', 'Répondez à quelques questions sur l’organisation, vos missions et la problématique.'],
   ['02', 'Ajoutez vos sources', 'Déposez vos notes, documents et références pour contextualiser la génération.'],
-  ['03', 'Générez et révisez', 'Obtenez une structure et un rapport modifiable section par section.'],
-  ['04', 'Exportez votre rendu', 'Finalisez puis téléchargez le document dans le format demandé par votre école.'],
+  ['03', 'Validez le plan et révisez', 'Approuvez la structure, puis corrigez le brouillon section par section.'],
+  ['04', 'Vérifiez et exportez', 'Résolvez les points signalés, validez le rapport puis téléchargez le format souhaité.'],
 ]
 
 export default function LandingPage() {

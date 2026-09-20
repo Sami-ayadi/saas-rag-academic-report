@@ -10,6 +10,8 @@ import {
   resolveEntitlements,
 } from '@/lib/entitlements';
 import type { ReportSection } from '@/lib/types';
+import { assessReportQuality } from '@/lib/report-quality';
+import type { Prisma } from '@prisma/client';
 
 export const runtime = 'nodejs';
 
@@ -163,13 +165,21 @@ export async function PATCH(
 
       const wordCount = newFullContent.split(/\s+/).filter(Boolean).length;
 
-      const updated = await db.report.update({
-        where: { id },
-        data: {
-          sections: JSON.stringify(sections),
-          content: newFullContent,
-          wordCount,
-        },
+      const qualityIssues = assessReportQuality(sections as ReportSection[]);
+      const updated = await db.$transaction(async (transaction) => {
+        const saved = await transaction.report.update({
+          where: { id },
+          data: {
+            sections: JSON.stringify(sections),
+            content: newFullContent,
+            wordCount,
+            qualityIssues: qualityIssues as unknown as Prisma.InputJsonValue,
+            status: 'REVIEW_REQUIRED',
+            approvedAt: null,
+          },
+        });
+        await transaction.project.update({ where: { id: report.projectId }, data: { status: 'REVIEW_REQUIRED' } });
+        return saved;
       });
 
       const { outline: _outline, ...storedReport } = updated;
@@ -191,6 +201,8 @@ export async function PATCH(
         data: {
           content,
           wordCount,
+          status: 'REVIEW_REQUIRED',
+          approvedAt: null,
         },
       });
 

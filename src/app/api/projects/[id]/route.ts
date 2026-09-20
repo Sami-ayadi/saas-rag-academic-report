@@ -5,6 +5,7 @@ import { getAuthenticatedUser } from '@/lib/auth';
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input';
 import { resolveEntitlements } from '@/lib/entitlements';
 import { publicReportFailureMessage } from '@/lib/llm-errors';
+import { removeProjectStorage } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 
@@ -39,12 +40,30 @@ export async function GET(
             size: true,
             status: true,
             chunkCount: true,
+            role: true,
+            pageCount: true,
+            extractionError: true,
+            processedAt: true,
             createdAt: true,
             updatedAt: true,
           },
         },
         summaries: {
           orderBy: { createdAt: 'desc' },
+        },
+        reportPlans: {
+          orderBy: { version: 'desc' },
+          take: 1,
+          select: {
+            id: true,
+            version: true,
+            templateKey: true,
+            content: true,
+            status: true,
+            approvedAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
         },
         reports: {
           orderBy: { createdAt: 'desc' },
@@ -154,6 +173,8 @@ export async function DELETE(
         { status: 404 }
       );
     }
+
+    await removeProjectStorage(user.id, id);
 
     await db.$transaction([
       db.apiUsage.deleteMany({ where: { projectId: id, userId: user.id } }),

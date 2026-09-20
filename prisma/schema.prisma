@@ -23,6 +23,8 @@ enum Role {
 enum JobStatus {
   PENDING
   PROCESSING
+  RETRY_WAIT
+  NEEDS_INPUT
   COMPLETED
   FAILED
   CANCELLED
@@ -30,11 +32,29 @@ enum JobStatus {
 
 enum ProjectStatus {
   DRAFT
+  SOURCES_READY
+  BRIEF_APPROVED
+  OUTLINE_APPROVED
+  DRAFTING
+  REVIEW_REQUIRED
+  APPROVED
   SUMMARIZING
   SUMMARY_READY
   GENERATING
   REPORT_READY
   EXPORTED
+}
+
+enum ReportPlanStatus {
+  DRAFT
+  APPROVED
+  SUPERSEDED
+}
+
+enum QuotaReservationStatus {
+  RESERVED
+  CONSUMED
+  RELEASED
 }
 
 enum IntakeStatus {
@@ -66,6 +86,7 @@ model User {
   birthDate        DateTime?
   gender           String?
   image            String?
+  university       String?
   tier             Tier      @default(FREE)
   role             Role      @default(USER)
   isActive         Boolean   @default(true)
@@ -77,25 +98,26 @@ model User {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  projects       Project[]
-  jobs           GenerationJob[]
-  accounts       Account[]
-  sessions       Session[]
-  adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
-  notifications  Notification[]
-  quotaUsage     EntitlementUsage[]
+  projects          Project[]
+  jobs              GenerationJob[]
+  accounts          Account[]
+  sessions          Session[]
+  adminAuditLogs    AdminAuditLog[]    @relation("AdminAuditActor")
+  notifications     Notification[]
+  quotaUsage        EntitlementUsage[]
+  quotaReservations QuotaReservation[]
 }
 
 model Notification {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
   type      String
   title     String
   message   String
   linkView  String?
-  metadata  Json     @default("{}")
+  metadata  Json      @default("{}")
   readAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -195,13 +217,14 @@ model Project {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documents Document[]
-  summaries Summary[]
-  reports   Report[]
-  jobs      GenerationJob[]
-  intake    ProjectIntake?
-  briefs    ProjectBrief[]
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents   Document[]
+  summaries   Summary[]
+  reports     Report[]
+  jobs        GenerationJob[]
+  intake      ProjectIntake?
+  briefs      ProjectBrief[]
+  reportPlans ReportPlan[]
 
   @@index([userId])
 }
@@ -232,29 +255,57 @@ model ProjectBrief {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  intake  ProjectIntake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  intake      ProjectIntake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  reportPlans ReportPlan[]
 
   @@unique([projectId, version])
   @@index([intakeId])
 }
 
 model Document {
-  id           String   @id @default(cuid())
-  projectId    String
-  filename     String
-  originalName String
-  mimeType     String
-  size         Int
-  storageKey   String
-  status       String   @default("uploaded")
-  chunkCount   Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id              String    @id @default(cuid())
+  projectId       String
+  filename        String
+  originalName    String
+  mimeType        String
+  size            Int
+  storageKey      String
+  status          String    @default("uploaded")
+  role            String    @default("PROJECT_EVIDENCE")
+  chunkCount      Int       @default(0)
+  pageCount       Int?
+  contentHash     String?
+  extractionError String?
+  processedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  chunks  Embedding[]
 
   @@index([projectId])
+}
+
+model ReportPlan {
+  id          String           @id @default(cuid())
+  projectId   String
+  briefId     String
+  version     Int              @default(1)
+  templateKey String           @default("software-classic-v1")
+  content     Json
+  status      ReportPlanStatus @default(DRAFT)
+  approvedAt  DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  brief   ProjectBrief @relation(fields: [briefId], references: [id], onDelete: Cascade)
+  reports Report[]
+
+  @@unique([projectId, version])
+  @@index([briefId])
+  @@index([projectId, status])
 }
 
 model Summary {
@@ -274,21 +325,26 @@ model Summary {
 }
 
 model Report {
-  id        String        @id @default(cuid())
-  projectId String
-  summaryId String?
-  title     String
-  content   String        @default("")
-  sections  String        @default("[]")
+  id            String        @id @default(cuid())
+  projectId     String
+  summaryId     String?
+  planId        String?
+  title         String
+  content       String        @default("")
+  sections      String        @default("[]")
   /// Protected table of contents. Only served to tiers with the tableOfContents entitlement.
-  outline   String        @default("[]")
-  status    ProjectStatus @default(DRAFT)
-  wordCount Int           @default(0)
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  outline       String        @default("[]")
+  status        ProjectStatus @default(DRAFT)
+  wordCount     Int           @default(0)
+  qualityIssues Json          @default("[]")
+  approvedAt    DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  summary Summary? @relation(fields: [summaryId], references: [id])
+  project Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  summary Summary?         @relation(fields: [summaryId], references: [id])
+  plan    ReportPlan?      @relation(fields: [planId], references: [id])
+  exports ExportArtifact[]
 
   @@index([projectId])
 }
@@ -297,12 +353,21 @@ model GenerationJob {
   id              String    @id @default(cuid())
   userId          String
   projectId       String
+  idempotencyKey  String?
+  contextHash     String?
   type            String    @default("report")
   status          JobStatus @default(PENDING)
   progress        Int       @default(0)
   progressMessage String    @default("")
   outputData      String?
   errorMessage    String?
+  attempt         Int       @default(0)
+  maxAttempts     Int       @default(5)
+  lockedBy        String?
+  leaseExpiresAt  DateTime?
+  heartbeatAt     DateTime?
+  nextAttemptAt   DateTime?
+  quotaPeriod     String?
   startedAt       DateTime?
   completedAt     DateTime?
   createdAt       DateTime  @default(now())
@@ -311,8 +376,10 @@ model GenerationJob {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, idempotencyKey])
   @@index([userId])
   @@index([projectId])
+  @@index([status, nextAttemptAt, createdAt])
 }
 
 model Embedding {
@@ -320,13 +387,31 @@ model Embedding {
   projectId  String
   documentId String?
   chunkIndex Int      @default(0)
+  pageNumber Int?
+  locator    String?
   content    String
   embedding  String   @default("")
   metadata   String   @default("{}")
   createdAt  DateTime @default(now())
 
+  document Document? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
   @@index([projectId])
   @@index([documentId])
+  @@index([projectId, documentId, chunkIndex])
+}
+
+model ExportArtifact {
+  id          String   @id @default(cuid())
+  reportId    String
+  format      String
+  storageKey  String
+  contentHash String
+  createdAt   DateTime @default(now())
+
+  report Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId, createdAt])
 }
 
 /// Monthly, per-kind quota counters consumed atomically by the entitlement module.
@@ -345,6 +430,21 @@ model EntitlementUsage {
 
   @@unique([userId, period, kind])
   @@index([userId, period])
+}
+
+model QuotaReservation {
+  id           String                 @id @default(cuid())
+  operationKey String                 @unique
+  userId       String
+  period       String
+  kind         String
+  status       QuotaReservationStatus @default(RESERVED)
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, period, kind])
 }
 
 /// Stripe webhook event IDs already processed (idempotency guard): Stripe

@@ -69,6 +69,73 @@ export async function refundQuota(
   })
 }
 
+export async function reserveQuotaForOperation(
+  userId: string,
+  operationKey: string,
+  kind: 'generation' | 'regeneration',
+  limit: number,
+  period: string,
+) {
+  if (limit <= 0) throw new QuotaExceededError(`No ${kind} credits available for this period`)
+  try {
+    return await db.$transaction(async (transaction) => {
+    const existing = await transaction.quotaReservation.findUnique({ where: { operationKey } })
+    if (existing) return { reservation: existing, created: false }
+
+    const usage = await transaction.entitlementUsage.findUnique({
+      where: { userId_period_kind: { userId, period, kind } },
+    })
+    if ((usage?.used ?? 0) >= limit) throw new QuotaExceededError(`Monthly ${kind} limit reached (${limit})`)
+    if (usage) {
+      const updated = await transaction.entitlementUsage.updateMany({
+        where: { id: usage.id, used: { lt: limit } },
+        data: { used: { increment: 1 } },
+      })
+      if (updated.count !== 1) throw new QuotaExceededError(`Monthly ${kind} limit reached (${limit})`)
+    } else {
+      await transaction.entitlementUsage.create({ data: { userId, period, kind, used: 1 } })
+    }
+    const reservation = await transaction.quotaReservation.create({
+      data: { operationKey, userId, period, kind, status: 'RESERVED' },
+    })
+    return { reservation, created: true }
+    }, { isolationLevel: 'Serializable' })
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'P2002') {
+      const reservation = await db.quotaReservation.findUnique({ where: { operationKey } })
+      if (reservation) return { reservation, created: false }
+    }
+    throw error
+  }
+}
+
+export async function consumeQuotaReservation(operationKey: string) {
+  await db.quotaReservation.updateMany({
+    where: { operationKey, status: 'RESERVED' },
+    data: { status: 'CONSUMED' },
+  })
+}
+
+export async function releaseQuotaReservation(operationKey: string) {
+  await db.$transaction(async (transaction) => {
+    const released = await transaction.quotaReservation.updateMany({
+      where: { operationKey, status: 'RESERVED' },
+      data: { status: 'RELEASED' },
+    })
+    if (released.count !== 1) return
+    const reservation = await transaction.quotaReservation.findUniqueOrThrow({ where: { operationKey } })
+    await transaction.entitlementUsage.updateMany({
+      where: {
+        userId: reservation.userId,
+        period: reservation.period,
+        kind: reservation.kind,
+        used: { gt: 0 },
+      },
+      data: { used: { decrement: 1 } },
+    })
+  })
+}
+
 export async function quotaSnapshot(
   userId: string,
   entitlements: Entitlements,

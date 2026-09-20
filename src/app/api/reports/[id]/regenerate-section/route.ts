@@ -8,6 +8,7 @@ import { applyReportVisibility, resolveEntitlements } from '@/lib/entitlements'
 import { consumeQuota, QuotaExceededError, refundQuota, usagePeriod } from '@/lib/entitlements-server'
 import { isLlmConfigured, reviseReportSection } from '@/lib/report-generation'
 import type { ReportSection } from '@/lib/types'
+import { retrieveRelevantSourceChunks, sourceChunksForPrompt } from '@/lib/source-retrieval'
 
 export const runtime = 'nodejs'
 
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const report = await db.report.findFirst({
       where: { id, project: { userId: user.id } },
-      include: { project: { include: { documents: { select: { originalName: true } } } } },
+      include: { project: { include: { documents: { where: { role: 'PROJECT_EVIDENCE' }, select: { originalName: true } } } } },
     })
     if (!report) return NextResponse.json({ error: 'Rapport non trouvé', code: 'REPORT_NOT_FOUND' }, { status: 404 })
 
@@ -54,6 +55,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
 
     try {
+      const sourceChunks = await retrieveRelevantSourceChunks(report.projectId, `${targetSection.title}\n${instructions ?? ''}\n${targetSection.content}`, 18)
       const generated = await reviseReportSection({
         title: report.project.title,
         brief: report.project.brief,
@@ -62,6 +64,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         field: report.project.field,
         language: report.project.language,
         sourceNames: report.project.documents.map((document) => document.originalName),
+        sourceExcerpts: sourceChunksForPrompt(sourceChunks),
       }, targetSection, instructions)
 
       await db.apiUsage.create({

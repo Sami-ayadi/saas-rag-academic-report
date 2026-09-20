@@ -4,7 +4,9 @@ import { csrfCookieName, verifyCsrfToken } from './lib/csrf'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 const MAX_API_BODY_BYTES = 1_500_000
-const MAX_UPLOAD_BODY_BYTES = 10_500_000
+// The route applies the account-specific limit (5/25/100 MiB). Proxy only
+// rejects bodies above the largest paid tier plus multipart overhead.
+const MAX_UPLOAD_BODY_BYTES = 105_000_000
 const RATE_WINDOW_MS = 60_000
 
 interface RateEntry {

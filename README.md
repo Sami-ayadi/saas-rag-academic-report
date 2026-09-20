@@ -212,20 +212,25 @@ npm run db:deploy
 # 5 (optionnel, développement uniquement). Charger les données de démonstration
 # Définir AUTH_ALLOW_DEMO=true et NEXT_PUBLIC_AUTH_ALLOW_DEMO=true dans .env
 # Via l'interface : cliquer le bouton "Charger les données démo" sur le Dashboard
-# Ou via API : curl -X POST http://localhost:3000/api/seed
+# Ou via API : curl -X POST http://localhost:3001/api/seed
 
 # 6. Lancer le serveur de développement
 npm run dev
+
+# 7. Dans un second terminal, lancer le worker durable de rapports
+npm run worker:reports
 ```
 
-L'application est accessible sur **http://localhost:3000**.
+L'application est accessible sur **http://localhost:3001**. Le script `npm run dev` utilise Turbopack; `npm run dev:webpack` fournit le mode de compatibilité Webpack.
+
+Le worker doit rester actif en production et utiliser la même base de données et le même volume privé `PRIVATE_STORAGE_ROOT` que l'application web. Les rapports interrompus sont repris à partir de la dernière section enregistrée; une limitation temporaire du fournisseur IA déclenche une reprise automatique avec délai progressif.
 
 ### Variables d'environnement
 
 | Variable | Description | Valeur par défaut |
 |----------|-------------|-------------------|
 | `DATABASE_URL` | URL PostgreSQL | `postgresql://postgres:postgres@localhost:5432/rag_report?schema=public` |
-| `NEXTAUTH_URL` | URL publique de l'application | `http://localhost:3000` |
+| `NEXTAUTH_URL` | URL publique de l'application | `http://localhost:3001` |
 | `NEXTAUTH_SECRET` | Secret de session et de signature CSRF (32 caractères minimum) | — |
 | `GOOGLE_CLIENT_ID` | Identifiant OAuth Google | — |
 | `GOOGLE_CLIENT_SECRET` | Secret OAuth Google | — |
@@ -242,7 +247,7 @@ L'application est accessible sur **http://localhost:3000**.
 | `AUTH_ALLOW_DEMO` | Active l'utilisateur démo côté serveur, hors production uniquement | `false` |
 | `NEXT_PUBLIC_AUTH_ALLOW_DEMO` | Active l'interface démo côté client | `false` |
 
-Le guide pas à pas se trouve dans [GOOGLE_AUTH_SETUP.md](./GOOGLE_AUTH_SETUP.md). Pour le développement, l'origine est `http://localhost:3000` et l'URI de redirection est `http://localhost:3000/api/auth/callback/google`.
+Le guide pas à pas se trouve dans [GOOGLE_AUTH_SETUP.md](./GOOGLE_AUTH_SETUP.md). Pour le développement, l'origine est `http://localhost:3001` et l'URI de redirection est `http://localhost:3001/api/auth/callback/google`.
 
 Quand les trois variables d’un endpoint `LLM_FALLBACK_*` sont définies, les appels alternent entre les endpoints configurés. Si l’un répond avec une erreur HTTP, le même appel est essayé sur le suivant. Deux modèles TokenRouter peuvent utiliser le même URL avec des clés différentes. Les clés d’un même compte OpenRouter partagent le quota gratuit : elles ne constituent pas deux fournisseurs indépendants.
 
@@ -457,14 +462,14 @@ Cette section décrit comment **tester chaque use case** de l'application pour v
 npm run dev
 
 # Dans un autre terminal, charger les données de démo
-curl -X POST http://localhost:3000/api/seed
+curl -X POST http://localhost:3001/api/seed
 ```
 
 ### Use Case 1 — Dashboard et navigation
 
 **Objectif** : Vérifier que le Dashboard charge correctement et que la navigation fonctionne.
 
-1. Ouvrir `http://localhost:3000`
+1. Ouvrir `http://localhost:3001`
 2. ✅ La page Dashboard s'affiche avec les cartes de statistiques (Projets, Documents, Rapports, Crédits)
 3. ✅ Le tableau des projets liste les projets de démo (4 projets attendus)
 4. ✅ Cliquer sur un projet dans le tableau → la vue **Détail Projet** s'ouvre
@@ -529,7 +534,7 @@ curl -X POST http://localhost:3000/api/seed
 # Via l'interface : cliquer sur le bouton d'export dans l'éditeur de rapport
 
 # Ou via API :
-curl -X POST http://localhost:3000/api/reports/<REPORT_ID>/export \
+curl -X POST http://localhost:3001/api/reports/<REPORT_ID>/export \
   -H "Content-Type: application/json" \
   -d '{"format": "pdf"}'
 ```
@@ -543,27 +548,27 @@ curl -X POST http://localhost:3000/api/reports/<REPORT_ID>/export \
 
 ```bash
 # Liste des projets
-curl http://localhost:3000/api/projects
+curl http://localhost:3001/api/projects
 
 # Détail d'un projet (remplacer <ID>)
-curl http://localhost:3000/api/projects/<PROJECT_ID>
+curl http://localhost:3001/api/projects/<PROJECT_ID>
 
 # Créer un projet
-curl -X POST http://localhost:3000/api/projects \
+curl -X POST http://localhost:3001/api/projects \
   -H "Content-Type: application/json" \
   -d '{"title":"Test API","academicLevel":"Master"}'
 
 # Profil utilisateur
-curl http://localhost:3000/api/user
+curl http://localhost:3001/api/user
 
 # Taux de pricing
-curl http://localhost:3000/api/pricing
+curl http://localhost:3001/api/pricing
 
 # Statut d'un job
-curl http://localhost:3000/api/jobs/<JOB_ID>
+curl http://localhost:3001/api/jobs/<JOB_ID>
 
 # Régénérer une section
-curl -X POST http://localhost:3000/api/reports/<REPORT_ID>/regenerate-section \
+curl -X POST http://localhost:3001/api/reports/<REPORT_ID>/regenerate-section \
   -H "Content-Type: application/json" \
   -d '{"sectionId":"introduction","instructions":"Rendre plus concis"}'
 ```
@@ -594,7 +599,7 @@ npm run build
 
 # Lancer en production
 npm run start
-# Le serveur écoute sur le port 3000
+# Le serveur écoute sur le port 3001
 ```
 
 ### Déploiement recommandé

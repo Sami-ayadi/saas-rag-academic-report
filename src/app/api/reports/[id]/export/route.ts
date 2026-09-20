@@ -7,6 +7,8 @@ import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input'
 import { canExport, resolveEntitlements } from '@/lib/entitlements'
 import { createReportExport } from '@/lib/report-export'
 import type { ReportSection } from '@/lib/types'
+import { createHash, randomUUID } from 'node:crypto'
+import { exportStorageKey, writePrivateFile } from '@/lib/storage'
 
 export const runtime = 'nodejs'
 
@@ -28,6 +30,13 @@ export async function POST(
       include: { project: true },
     })
     if (!report) return NextResponse.json({ error: 'Rapport non trouvé' }, { status: 404 })
+
+    if (report.status !== 'APPROVED' || !report.approvedAt) {
+      return NextResponse.json({
+        error: 'Validez le rapport et corrigez les points bloquants avant l’export.',
+        code: 'REPORT_APPROVAL_REQUIRED',
+      }, { status: 409 })
+    }
 
     const { format } = await readJsonBody(request, exportSchema)
 
@@ -57,7 +66,18 @@ export async function POST(
       sections,
       project: report.project,
     }, format)
-    await db.project.update({ where: { id: report.projectId }, data: { status: 'EXPORTED' } })
+    const storedFilename = `${randomUUID()}-${exported.filename}`
+    const storageKey = exportStorageKey(user.id, report.projectId, storedFilename)
+    await writePrivateFile(storageKey, exported.bytes)
+    await db.$transaction([
+      db.exportArtifact.create({ data: {
+        reportId: report.id,
+        format,
+        storageKey,
+        contentHash: createHash('sha256').update(exported.bytes).digest('hex'),
+      } }),
+      db.project.update({ where: { id: report.projectId }, data: { status: 'EXPORTED' } }),
+    ])
 
     return new NextResponse(new Uint8Array(exported.bytes), {
       status: 200,

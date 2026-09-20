@@ -7,9 +7,9 @@ const globalForPrisma = globalThis as unknown as {
 export const db =
   globalForPrisma.prisma ??
   new PrismaClient({
-    // PRODUCTION: use a pooled URL, direct migration URL, and redacted query
-    // telemetry; confirm logs cannot contain report or personal data.
-    log: ['query'],
+    // Query logs are opt-in because production statements can reveal schema
+    // details and create excessive worker output.
+    log: process.env.PRISMA_LOG_QUERIES === 'true' ? ['query', 'warn', 'error'] : ['warn', 'error'],
   })
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db

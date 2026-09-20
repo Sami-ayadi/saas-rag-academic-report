@@ -13,6 +13,7 @@ export interface GenerationProject {
   sourceNames: string[]
   sourceExcerpts?: string[]
   structuredBrief?: unknown
+  reportTemplate?: 'software-classic-v1' | 'security-audit-v1'
 }
 
 export interface GenerationResult<T> {
@@ -287,6 +288,7 @@ function safeProjectContext(project: GenerationProject) {
     university: project.university?.slice(0, 200) ?? null,
     field: project.field?.slice(0, 120) ?? null,
     language: project.language.slice(0, 10),
+    reportTemplate: project.reportTemplate ?? 'software-classic-v1',
     sourceNames: project.sourceNames.slice(0, 30).map((name) => name.slice(0, 255)),
     sourceExcerpts: project.sourceExcerpts?.slice(0, 30).map((excerpt) => excerpt.slice(0, 1_500)) ?? [],
     structuredBrief: project.structuredBrief ?? null,
@@ -431,10 +433,13 @@ export function llmCostUsd(inputTokens: number, outputTokens: number): number {
 export interface ReportOutline {
   sections: Array<{
     id: string
+    parentId?: string | null
+    kind?: 'frontmatter' | 'chapter' | 'section' | 'backmatter'
     title: string
     order: number
     estimatedWords: number
     keyPoints: string[]
+    requiredEvidenceTypes?: string[]
   }>
   totalEstimatedWords: number
   totalEstimatedPages: number
@@ -445,10 +450,13 @@ const outlineSchema = z.object({
     .array(
       z.object({
         id: z.string().min(1).max(80),
+        parentId: z.string().min(1).max(80).nullable().optional(),
+        kind: z.enum(['frontmatter', 'chapter', 'section', 'backmatter']).optional(),
         title: z.string().min(1).max(200),
         order: z.number().int().min(0).max(30),
         estimatedWords: z.number().int().min(250).max(8_000),
-        keyPoints: z.array(z.string().min(3).max(300)).min(0).max(8),
+        keyPoints: z.array(z.string().min(3).max(300)).min(2).max(8),
+        requiredEvidenceTypes: z.array(z.string().min(2).max(80)).max(8).optional(),
       }),
     )
     .min(10)
@@ -468,7 +476,7 @@ const sectionOnlySchema = z.object({
     .max(1),
 })
 
-const OUTLINE_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"id":"introduction","title":"Introduction","order":0,"estimatedWords":900,"keyPoints":["Contexte du stage","Problématique","Objectifs","Plan du rapport"]}],"totalEstimatedWords":14000,"totalEstimatedPages":50}. Rules: 10 to 25 sections, approximately 280 words per page; section lengths should sum to the requested word target; order is consecutive starting at 0; keyPoints 3-6 items.'
+const OUTLINE_JSON_CONTRACT = 'Respond with a single JSON object and nothing else: {"sections":[{"id":"introduction","parentId":null,"kind":"frontmatter","title":"Introduction générale","order":0,"estimatedWords":900,"keyPoints":["Contexte du stage","Problématique","Objectifs","Plan du rapport"],"requiredEvidenceTypes":["brief-approved"]}],"totalEstimatedWords":14000,"totalEstimatedPages":50}. Rules: 10 to 25 ordered writing units; parentId expresses the chapter hierarchy when applicable; section lengths should sum to the requested word target; order is consecutive starting at 0; keyPoints 3-6 items; requiredEvidenceTypes lists concrete evidence needed for factual claims. Pages are an estimate only.'
 
 /**
  * Canonical final-year internship report (PFE) structure. The outline LLM call
@@ -482,12 +490,15 @@ const PFE_STRUCTURE_GUIDE = `Follow the canonical structure of a final-year acad
 4. "Bibliographie et webographie" and finally "Annexes" (glossary, extra diagrams, code extracts, user guides).
 Adapt all titles to the actual project subject and field. Total must match the requested page count.`
 
+const SECURITY_AUDIT_STRUCTURE_GUIDE = `For a security-audit report, use this methodological progression: context and authorized scope; audit standards and rules of engagement; test environment and procedure; controls actually performed; findings with evidence, impact and justified risk; remediation plan; limitations and retest perspectives. Never replace the audit protocol with a software-development needs/UML plan. Never state that a vulnerability, exploit or authorization exists unless it is supported by the approved brief or a supplied evidence source.`
+
 const SECTION_STYLE_GUIDE = `Style requirements (mandatory):
 - Flowing academic paragraphs of 150-250 words each; NEVER submit one-paragraph or list-only content.
 - Use Markdown "###" subheadings inside the section when it exceeds 1200 words (2 to 5 subheadings).
 - Bullet lists are allowed only to enumerate concrete requirements, technologies or results — max 2 lists of max 6 items, each item one full sentence.
 - Be specific: cite the company name, project name, technologies and figures given in the project context instead of generic statements.
-- No placeholders, no lorem ipsum, no "as an AI" disclaimers, no repetition of previous sections.
+- Never hide missing evidence with generic prose. Insert a concise blockquote beginning with "[À COMPLÉTER — preuve requise :]" when a required fact, result, figure or citation is missing.
+- No lorem ipsum, no "as an AI" disclaimers, no repetition of previous sections.
 - Formal academic French register (or English if the project language is English).`
 
 
@@ -498,6 +509,8 @@ function sectionMarkdownFromCompletion(text: string): string {
   }
   return cleaned
 }
+
+export type ReportOutlineSection = ReportOutline['sections'][number]
 
 // An outline is planning metadata. If a free model produces no usable outline,
 // this structure still lets the hosted API write every paragraph of the report.
@@ -550,7 +563,16 @@ function fallbackReportOutline(project: GenerationProject, targetPages: number):
         : french
           ? [title, 'Faits confirmés par le contexte fourni', 'Démarche, résultats et limites vérifiables']
           : [title, 'Facts supported by the supplied context', 'Verifiable methods, outcomes and limitations']
-    return { id, title, order, estimatedWords: references || annexes ? 250 : wordsForMainSection, keyPoints }
+    return {
+      id,
+      parentId: null,
+      kind: references || annexes ? 'backmatter' as const : order === 0 ? 'frontmatter' as const : 'section' as const,
+      title,
+      order,
+      estimatedWords: references || annexes ? 250 : wordsForMainSection,
+      keyPoints,
+      requiredEvidenceTypes: references ? ['bibliographic-records'] : annexes ? ['approved-assets'] : ['approved-brief', 'project-evidence'],
+    }
   })
   return { sections, totalEstimatedWords: targetWords, totalEstimatedPages: targetPages }
 }
@@ -565,8 +587,11 @@ export async function generateReportOutline(
 ): Promise<ReportOutline> {
   const system = `You are an expert academic report planner. Build a comprehensive ${targetPages}-page internship report outline in ${project.language === 'fr' ? 'French' : 'English'}. ${TRUST_BOUNDARY}`
   const suggestedSections = Math.min(22, Math.max(10, Math.round(targetPages / 3)))
+  const structureGuide = project.reportTemplate === 'security-audit-v1'
+    ? `${PFE_STRUCTURE_GUIDE}\n${SECURITY_AUDIT_STRUCTURE_GUIDE}`
+    : PFE_STRUCTURE_GUIDE
   const prompt = `Create a detailed outline for a ~${targetPages}-page academic internship report (PFE). Around ${suggestedSections} sections and approximately ${targetPages * 280} total words, distributed across sections.
-${PFE_STRUCTURE_GUIDE}
+${structureGuide}
 
 ${OUTLINE_JSON_CONTRACT}
 
@@ -590,10 +615,13 @@ ${summary.slice(0, 20_000)}`
           required: ['id', 'title', 'order', 'estimatedWords', 'keyPoints'],
           properties: {
             id: { type: 'string', minLength: 1, maxLength: 80 },
+            parentId: { type: ['string', 'null'], minLength: 1, maxLength: 80 },
+            kind: { type: 'string', enum: ['frontmatter', 'chapter', 'section', 'backmatter'] },
             title: { type: 'string', minLength: 1, maxLength: 200 },
             order: { type: 'integer', minimum: 0, maximum: 30 },
             estimatedWords: { type: 'integer', minimum: 250, maximum: 8000 },
-            keyPoints: { type: 'array', minItems: 0, maxItems: 8, items: { type: 'string', minLength: 3, maxLength: 300 } },
+            keyPoints: { type: 'array', minItems: 2, maxItems: 8, items: { type: 'string', minLength: 3, maxLength: 300 } },
+            requiredEvidenceTypes: { type: 'array', minItems: 0, maxItems: 8, items: { type: 'string', minLength: 2, maxLength: 80 } },
           },
         },
       },
@@ -658,7 +686,7 @@ async function generateLongSection(
 ): Promise<{ section: ReportSection; tokens: { input: number; output: number }; models: string[] }> {
   const target = outline.sections[index]
   const remaining = outline.sections.length - index - 1
-  const minWords = Math.max(200, Math.round(target.estimatedWords * 0.82))
+  const minWords = Math.max(180, Math.round(target.estimatedWords * 0.82))
   const system = `You are an expert academic writer. Write section ${index + 1} of ${outline.sections.length} ("${target.title}") of a ${outline.totalEstimatedPages}-page internship report in ${project.language === 'fr' ? 'French' : 'English'}. ${TRUST_BOUNDARY}`
   const prompt = `Write ONLY the body of this section as Markdown prose. Do not return JSON, an outer title or a code fence:
 - section id for context: ${target.id}
@@ -732,6 +760,7 @@ ${summary.slice(0, 20_000)}`
     }
   }
   if (!parsed) {
+    if (lastSectionError instanceof LlmHttpError) throw lastSectionError
     throw new Error(`Section "${target.title}" could not be generated after 4 attempts (${lastSectionError instanceof Error ? lastSectionError.message.slice(0, 200) : 'unknown error'})`)
   }
   return {
@@ -807,6 +836,11 @@ export function parseReportGenerationCheckpoint(value: unknown): ReportGeneratio
   return parsed.data
 }
 
+export function parseReportOutline(value: unknown): ReportOutline | null {
+  const parsed = outlineSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
+}
+
 export async function generateLongReportForProject(
   project: GenerationProject,
   summary: string,
@@ -814,11 +848,14 @@ export async function generateLongReportForProject(
   onProgress?: (progress: LongReportProgress) => Promise<void> | void,
   options?: {
     checkpoint?: ReportGenerationCheckpoint
+    outline?: ReportOutline
     onCheckpoint?: (checkpoint: ReportGenerationCheckpoint) => Promise<void> | void
+    sourceResolver?: (section: ReportOutlineSection) => Promise<string[]>
   },
 ): Promise<GenerationResult<ReportSection[]>> {
   const resumed = options?.checkpoint ? parseReportGenerationCheckpoint(options.checkpoint) : null
-  const outline = resumed?.outline ?? await generateReportOutline(project, summary, targetPages)
+  const providedOutline = options?.outline ? parseReportOutline(options.outline) : null
+  const outline = resumed?.outline ?? providedOutline ?? await generateReportOutline(project, summary, targetPages)
   const sections: ReportSection[] = [...(resumed?.sections ?? [])]
   let totalInput = resumed?.inputTokens ?? 0
   let totalOutput = resumed?.outputTokens ?? 0
@@ -830,7 +867,9 @@ export async function generateLongReportForProject(
   if (!resumed) await options?.onCheckpoint?.({ outline, sections: [], inputTokens: 0, outputTokens: 0, modelsUsed: [] })
 
   for (let i = sections.length; i < outline.sections.length; i++) {
-    const { section, tokens, models } = await generateLongSection(project, outline, summary, i, recap, words)
+    const sectionSources = options?.sourceResolver ? await options.sourceResolver(outline.sections[i]) : project.sourceExcerpts
+    const sectionProject = sectionSources ? { ...project, sourceExcerpts: sectionSources } : project
+    const { section, tokens, models } = await generateLongSection(sectionProject, outline, summary, i, recap, words)
     sections.push(section)
     totalInput += tokens.input
     totalOutput += tokens.output

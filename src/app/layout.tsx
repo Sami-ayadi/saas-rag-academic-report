@@ -1,25 +1,24 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import { headers } from "next/headers";
 import "./globals.css";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { SessionProvider } from "@/components/providers/session-provider";
 
-const geistSans = Geist({
+const notoSans = localFont({
+  src: [
+    { path: "./fonts/noto-sans-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/noto-sans-700.woff2", weight: "700", style: "normal" },
+  ],
   variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
   title: "RAG Report - Plateforme de Génération de Rapports Académiques",
   description:
-    "Générez des rapports académiques de qualité grâce à notre pipeline RAG intelligent. Importez vos documents, synthétisez les connaissances et produisez des rapports structurés.",
+    "Cadrez, rédigez et vérifiez un brouillon académique structuré à partir de vos propres sources.",
   keywords: [
     "RAG",
     "rapport académique",
@@ -30,12 +29,12 @@ export const metadata: Metadata = {
   ],
   authors: [{ name: "RAG Report Team" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.svg",
   },
   openGraph: {
     title: "RAG Report - Plateforme de Génération de Rapports Académiques",
     description:
-      "Générez des rapports académiques de qualité grâce à notre pipeline RAG intelligent.",
+      "Cadrez, rédigez et vérifiez un brouillon académique structuré à partir de vos propres sources.",
     siteName: "RAG Report",
     type: "website",
   },
@@ -51,7 +50,7 @@ export default async function RootLayout({
   return (
     <html lang="fr" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
+        className={`${notoSans.variable} antialiased bg-background text-foreground`}
       >
         <ThemeProvider
           attribute="class"

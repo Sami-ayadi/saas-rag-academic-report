@@ -21,6 +21,8 @@ import {
   FileUp,
   Layers,
   ClipboardList,
+  ListTree,
+  ShieldCheck,
 } from 'lucide-react'
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -31,6 +33,9 @@ import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   Dialog,
   DialogContent,
@@ -43,7 +48,7 @@ import {
 
 import { useAppStore } from '@/lib/store'
 import { secureFetch } from '@/lib/secure-fetch'
-import type { ProjectFull, DocumentItem, SummaryItem, ReportItem, GenerationJobItem } from '@/lib/types'
+import type { ProjectFull, DocumentItem, SummaryItem, ReportItem, GenerationJobItem, ReportPlanContent } from '@/lib/types'
 import {
   PROJECT_STATUS_LABELS,
   PROJECT_STATUS_COLORS,
@@ -72,9 +77,10 @@ function formatFileSize(bytes: number): string {
 }
 
 const PIPELINE_STEPS = [
-  { key: 'documents', label: 'Documents', icon: FileUp },
-  { key: 'summary', label: 'Résumé RAG', icon: Layers },
-  { key: 'report', label: 'Rapport', icon: FileText },
+  { key: 'documents', label: 'Dossier', icon: FileUp },
+  { key: 'plan', label: 'Plan', icon: ListTree },
+  { key: 'report', label: 'Rédaction', icon: FileText },
+  { key: 'review', label: 'Vérification', icon: ShieldCheck },
   { key: 'export', label: 'Export', icon: Download },
 ]
 
@@ -90,6 +96,10 @@ export function ProjectDetailView() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [documentRole, setDocumentRole] = useState<'PROJECT_EVIDENCE' | 'STRUCTURE_REFERENCE'>('PROJECT_EVIDENCE')
+  const [templateKey, setTemplateKey] = useState<'software-classic-v1' | 'security-audit-v1'>('software-classic-v1')
+  const [planContent, setPlanContent] = useState<ReportPlanContent | null>(null)
+  const [planning, setPlanning] = useState(false)
 
   const loadProject = useCallback(async () => {
     if (!selectedProjectId) return
@@ -99,6 +109,7 @@ export function ProjectDetailView() {
       if (res.ok) {
         const data = await res.json()
         setProject(data.project)
+        setPlanContent(data.project.reportPlans?.[0]?.content ?? null)
       }
     } catch {
       toast.error('Erreur lors du chargement du projet')
@@ -118,7 +129,7 @@ export function ProjectDetailView() {
         if (res.ok) {
           const data = await res.json()
           setJobProgress({ progress: data.job.progress, message: data.job.progressMessage, status: data.job.status })
-          if (data.job.status === 'COMPLETED' || data.job.status === 'FAILED') {
+          if (['COMPLETED', 'FAILED', 'CANCELLED', 'NEEDS_INPUT'].includes(data.job.status)) {
             if (data.job.status === 'FAILED') {
               toast.error(data.job.progressMessage || 'La génération a échoué. Réessayez.')
             }
@@ -160,7 +171,10 @@ export function ProjectDetailView() {
     if (!selectedProjectId) return
     setGeneratingReport(true)
     try {
-      const res = await secureFetch(`/api/projects/${selectedProjectId}/generate-report`, { method: 'POST' })
+      const res = await secureFetch(`/api/projects/${selectedProjectId}/generate-report`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+      })
       if (res.ok) {
         const data = await res.json()
         setActiveJobId(data.jobId)
@@ -182,6 +196,7 @@ export function ProjectDetailView() {
     try {
       const formData = new FormData()
       formData.set('file', uploadFile)
+      formData.set('role', documentRole)
       const res = await secureFetch(`/api/projects/${selectedProjectId}/documents`, {
         method: 'POST',
         body: formData,
@@ -199,6 +214,48 @@ export function ProjectDetailView() {
       toast.error('Erreur réseau')
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function handlePreparePlan() {
+    if (!selectedProjectId) return
+    setPlanning(true)
+    try {
+      const res = await secureFetch(`/api/projects/${selectedProjectId}/report-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateKey, targetPages: 50 }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) return toast.error(data.error || 'Impossible de préparer le plan')
+      setPlanContent(data.plan.content)
+      toast.success('Plan préparé. Vérifiez-le avant de le valider.')
+      await loadProject()
+    } catch {
+      toast.error('Erreur réseau pendant la préparation du plan')
+    } finally {
+      setPlanning(false)
+    }
+  }
+
+  async function updatePlan(action: 'save' | 'approve') {
+    const plan = project?.reportPlans?.[0]
+    if (!selectedProjectId || !plan || !planContent) return
+    setPlanning(true)
+    try {
+      const res = await secureFetch(`/api/projects/${selectedProjectId}/report-plan`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId: plan.id, action, content: planContent }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) return toast.error(data.error || 'Impossible de mettre à jour le plan')
+      toast.success(action === 'approve' ? 'Plan validé. La rédaction peut commencer.' : 'Plan sauvegardé')
+      await loadProject()
+    } catch {
+      toast.error('Erreur réseau pendant la mise à jour du plan')
+    } finally {
+      setPlanning(false)
     }
   }
 
@@ -224,9 +281,10 @@ export function ProjectDetailView() {
     const status = project.status
     switch (stepKey) {
       case 'documents': return (project.documents?.length ?? 0) > 0 ? 'done' : 'current'
-      case 'summary': return ['SUMMARIZING', 'SUMMARY_READY', 'GENERATING', 'REPORT_READY', 'EXPORTED'].includes(status) ? 'done' : (project.documents?.length ?? 0) > 0 ? 'current' : 'pending'
-      case 'report': return ['REPORT_READY', 'EXPORTED'].includes(status) ? 'done' : ['SUMMARY_READY'].includes(status) ? 'current' : 'pending'
-      case 'export': return status === 'EXPORTED' ? 'done' : status === 'REPORT_READY' ? 'current' : 'pending'
+      case 'plan': return ['OUTLINE_APPROVED', 'DRAFTING', 'REVIEW_REQUIRED', 'APPROVED', 'EXPORTED'].includes(status) ? 'done' : ['BRIEF_APPROVED', 'SOURCES_READY'].includes(status) ? 'current' : 'pending'
+      case 'report': return ['REVIEW_REQUIRED', 'APPROVED', 'EXPORTED'].includes(status) ? 'done' : status === 'OUTLINE_APPROVED' || status === 'DRAFTING' ? 'current' : 'pending'
+      case 'review': return ['APPROVED', 'EXPORTED'].includes(status) ? 'done' : status === 'REVIEW_REQUIRED' ? 'current' : 'pending'
+      case 'export': return status === 'EXPORTED' ? 'done' : status === 'APPROVED' ? 'current' : 'pending'
       default: return 'pending'
     }
   }
@@ -255,6 +313,7 @@ export function ProjectDetailView() {
 
   const latestSummary = project.summaries?.[0]
   const latestReport = project.reports?.[0]
+  const latestPlan = project.reportPlans?.[0]
 
   return (
     <motion.div
@@ -263,22 +322,24 @@ export function ProjectDetailView() {
       initial="hidden"
       animate="show"
     >
-      {/* Progress Overlay */}
+      {/* Progress remains visible without blocking consultation of the dossier. */}
       {jobProgress && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm"
+          className="sticky top-3 z-20"
         >
-          <Card className="w-full max-w-md">
-            <CardHeader className="text-center">
-              <Loader2 className="mx-auto size-10 animate-spin text-primary" />
-              <CardTitle className="mt-2">Génération en cours...</CardTitle>
+          <Card className="border-primary/30 shadow-lg">
+            <CardHeader className="flex-row items-center gap-3 pb-3">
+              <Loader2 className="size-6 animate-spin text-primary" />
+              <div>
+              <CardTitle className="text-base">Génération en cours</CardTitle>
               <CardDescription>{jobProgress.message || 'Traitement en cours'}</CardDescription>
+              </div>
             </CardHeader>
             <CardContent className="space-y-3">
               <Progress value={jobProgress.progress} className="h-2" />
-              <p className="text-center text-sm text-muted-foreground tabular-nums">
+              <p className="text-right text-sm text-muted-foreground tabular-nums">
                 {jobProgress.progress}%
               </p>
             </CardContent>
@@ -356,11 +417,12 @@ export function ProjectDetailView() {
       {/* Tabs */}
       <motion.div variants={itemVariants}>
         <Tabs defaultValue="documents" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="documents" className="text-xs sm:text-sm">Documents</TabsTrigger>
-            <TabsTrigger value="resume" className="text-xs sm:text-sm">Résumé</TabsTrigger>
-            <TabsTrigger value="rapports" className="text-xs sm:text-sm">Rapports</TabsTrigger>
-            <TabsTrigger value="pipeline" className="text-xs sm:text-sm">Pipeline</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-5">
+            <TabsTrigger value="documents" className="text-xs sm:text-sm">Dossier</TabsTrigger>
+            <TabsTrigger value="resume" className="text-xs sm:text-sm">Brief</TabsTrigger>
+            <TabsTrigger value="plan" className="text-xs sm:text-sm">Plan</TabsTrigger>
+            <TabsTrigger value="rapports" className="text-xs sm:text-sm">Rapport</TabsTrigger>
+            <TabsTrigger value="pipeline" className="text-xs sm:text-sm">Suivi</TabsTrigger>
           </TabsList>
 
           {/* Documents Tab */}
@@ -369,7 +431,7 @@ export function ProjectDetailView() {
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
                 <div>
                   <CardTitle className="text-base">Documents sources</CardTitle>
-                  <CardDescription>PDF, Word, images — les sources pour votre rapport</CardDescription>
+                  <CardDescription>PDF, Word, texte ou Markdown utilisés comme preuves ou comme référence de structure</CardDescription>
                 </div>
                 <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
                   <DialogTrigger asChild>
@@ -380,7 +442,7 @@ export function ProjectDetailView() {
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Ajouter un document</DialogTitle>
-                      <DialogDescription>Sélectionnez un fichier PDF, DOCX, TXT ou Markdown de 10 Mo maximum.</DialogDescription>
+                      <DialogDescription>Sélectionnez un fichier PDF, DOCX, TXT ou Markdown. La limite dépend de votre offre.</DialogDescription>
                     </DialogHeader>
                     <div className="py-4">
                       <label htmlFor="project-document-upload" className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-8 text-center hover:bg-muted/40">
@@ -397,6 +459,13 @@ export function ProjectDetailView() {
                           className="sr-only"
                           onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
                         />
+                        <Select value={documentRole} onValueChange={(value) => setDocumentRole(value as typeof documentRole)}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="PROJECT_EVIDENCE">Source de preuve pour le contenu</SelectItem>
+                            <SelectItem value="STRUCTURE_REFERENCE">Exemple de structure uniquement</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
                     </div>
                     <DialogFooter>
@@ -428,13 +497,15 @@ export function ProjectDetailView() {
                             <div>
                               <p className="text-sm font-medium">{doc.originalName}</p>
                               <p className="text-xs text-muted-foreground">
-                                {formatFileSize(doc.size)} · {doc.chunkCount} chunks
+                                {formatFileSize(doc.size)} · {doc.pageCount ? `${doc.pageCount} pages · ` : ''}{doc.chunkCount} passages
                               </p>
+                              <p className="text-[11px] text-muted-foreground">{doc.role === 'PROJECT_EVIDENCE' ? 'Source de preuve' : 'Référence de structure'}</p>
+                              {doc.extractionError && <p className="text-[11px] text-destructive">{doc.extractionError}</p>}
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
                             <Badge variant="secondary" className="text-[10px]">
-                              {doc.status === 'uploaded' ? 'Indexé' : doc.status}
+                              {doc.status === 'processed' ? 'Indexé' : doc.status === 'needs_ocr' ? 'OCR requis' : doc.status}
                             </Badge>
                             <Button
                               variant="ghost"
@@ -516,6 +587,93 @@ export function ProjectDetailView() {
             </Card>
           </TabsContent>
 
+          {/* Plan Tab */}
+          <TabsContent value="plan" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Plan du rapport</CardTitle>
+                <CardDescription>Choisissez une méthode, relisez les objectifs de chaque partie, puis validez le plan avant la rédaction.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {!latestPlan ? (
+                  <div className="space-y-4 rounded-lg border p-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Modèle de rapport</label>
+                      <Select value={templateKey} onValueChange={(value) => setTemplateKey(value as typeof templateKey)}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="software-classic-v1">Projet logiciel classique</SelectItem>
+                          <SelectItem value="security-audit-v1">Audit de sécurité</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Button onClick={handlePreparePlan} disabled={planning}>
+                      {planning ? <Loader2 className="mr-2 size-4 animate-spin" /> : <ListTree className="mr-2 size-4" />}
+                      Préparer le plan
+                    </Button>
+                    <p className="text-xs text-muted-foreground">Le brief approuvé est requis. Les exemples de structure n’apportent jamais de faits au contenu.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={latestPlan.status === 'APPROVED' ? 'default' : 'secondary'}>
+                        {latestPlan.status === 'APPROVED' ? 'Plan validé' : latestPlan.status === 'DRAFT' ? 'Brouillon à vérifier' : 'Remplacé'}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">Version {latestPlan.version} · {planContent?.totalEstimatedPages ?? 50} pages estimées</span>
+                    </div>
+                    {planContent && (
+                      <div className="space-y-3">
+                        {planContent.sections.map((section, index) => (
+                          <div key={section.id} className="space-y-2 rounded-lg border p-3">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline">{index + 1}</Badge>
+                              <Input
+                                value={section.title}
+                                disabled={latestPlan.status !== 'DRAFT'}
+                                onChange={(event) => setPlanContent({
+                                  ...planContent,
+                                  sections: planContent.sections.map((item) => item.id === section.id ? { ...item, title: event.target.value } : item),
+                                })}
+                              />
+                              <span className="whitespace-nowrap text-xs text-muted-foreground">≈ {section.estimatedWords} mots</span>
+                            </div>
+                            <Textarea
+                              value={section.keyPoints.join('\n')}
+                              disabled={latestPlan.status !== 'DRAFT'}
+                              onChange={(event) => setPlanContent({
+                                ...planContent,
+                                sections: planContent.sections.map((item) => item.id === section.id ? {
+                                  ...item,
+                                  keyPoints: event.target.value.split(/\r?\n/).map((point) => point.trim()).filter(Boolean),
+                                } : item),
+                              })}
+                              aria-label={`Points attendus pour ${section.title}`}
+                            />
+                            <p className="text-xs text-muted-foreground">Un point attendu par ligne. Ces points guident la rédaction et les preuves à retrouver.</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {latestPlan.status === 'DRAFT' && (
+                      <div className="flex flex-wrap gap-2">
+                        <Button variant="outline" onClick={() => updatePlan('save')} disabled={planning}>Sauvegarder</Button>
+                        <Button onClick={() => updatePlan('approve')} disabled={planning}>
+                          {planning && <Loader2 className="mr-2 size-4 animate-spin" />}
+                          Valider le plan
+                        </Button>
+                      </div>
+                    )}
+                    {latestPlan.status !== 'DRAFT' && (
+                      <Button variant="outline" onClick={handlePreparePlan} disabled={planning}>
+                        Préparer une nouvelle version
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           {/* Reports Tab */}
           <TabsContent value="rapports" className="space-y-4">
             <Card>
@@ -545,13 +703,13 @@ export function ProjectDetailView() {
                     <Button
                       size="sm"
                       onClick={handleGenerateReport}
-                      disabled={generatingReport}
+                      disabled={generatingReport || latestPlan?.status !== 'APPROVED'}
                     >
                       {generatingReport ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Play className="mr-2 size-4" />}
                       Générer le rapport
                     </Button>
-                    {!latestSummary && (
-                      <p className="text-xs text-destructive">Un résumé est requis avant la génération du rapport</p>
+                    {latestPlan?.status !== 'APPROVED' && (
+                      <p className="text-xs text-destructive">Validez d’abord le brief et le plan du rapport.</p>
                     )}
                   </div>
                 ) : (
@@ -583,7 +741,7 @@ export function ProjectDetailView() {
                       >
                         <Eye className="mr-2 size-4" /> Ouvrir l&apos;éditeur
                       </Button>
-                      <Button size="sm" variant="outline" onClick={handleGenerateReport} disabled={generatingReport}>
+                      <Button size="sm" variant="outline" onClick={handleGenerateReport} disabled={generatingReport || latestPlan?.status !== 'APPROVED'}>
                         <RefreshCw className="mr-2 size-4" /> Régénérer
                       </Button>
                     </div>

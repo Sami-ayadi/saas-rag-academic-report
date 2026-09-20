@@ -1,4 +1,3 @@
-import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -9,6 +8,8 @@ import { getAuthenticatedUser } from '@/lib/auth'
 import { apiRequestErrorResponse, readJsonBody } from '@/lib/api-input'
 import { resolveEntitlements } from '@/lib/entitlements'
 import { isSerializationFailure, QuotaExceededError } from '@/lib/entitlements-server'
+import { chunkExtractedDocument, extractDocument, type SupportedDocumentExtension } from '@/lib/document-extraction'
+import { removePrivateFile, uploadStorageKey, writePrivateFile } from '@/lib/storage'
 
 export const runtime = 'nodejs'
 
@@ -23,28 +24,10 @@ const deleteDocumentSchema = z.object({
   documentId: z.string().trim().min(1).max(100),
 }).strict()
 
-function storageRoot() {
-  return path.resolve(process.cwd(), 'storage', 'uploads')
-}
-
-function safeStoragePath(...segments: string[]) {
-  const root = storageRoot()
-  const resolved = path.resolve(root, ...segments)
-  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
-    throw new Error('Invalid storage path')
-  }
-  return resolved
-}
-
 function hasValidSignature(extension: keyof typeof ALLOWED_FILES, bytes: Buffer) {
   if (extension === '.pdf') return bytes.subarray(0, 5).toString('ascii') === '%PDF-'
   if (extension === '.docx') return bytes[0] === 0x50 && bytes[1] === 0x4b
   return !bytes.includes(0)
-}
-
-function extractText(extension: keyof typeof ALLOWED_FILES, bytes: Buffer) {
-  if (extension !== '.txt' && extension !== '.md') return ''
-  return new TextDecoder('utf-8', { fatal: false }).decode(bytes).replace(/\0/g, '').slice(0, 250_000)
 }
 
 export async function GET(
@@ -74,7 +57,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  let storedAbsolutePath: string | undefined
+  let storedStorageKey: string | undefined
   try {
     const { id } = await params
     const user = await getAuthenticatedUser()
@@ -103,6 +86,10 @@ export async function POST(
 
     const form = await request.formData()
     const file = form.get('file')
+    const roleValue = form.get('role')
+    const role = typeof roleValue === 'string' && ['PROJECT_EVIDENCE', 'STRUCTURE_REFERENCE'].includes(roleValue)
+      ? roleValue
+      : 'PROJECT_EVIDENCE'
     if (!(file instanceof File)) return NextResponse.json({ error: 'Fichier manquant' }, { status: 400 })
     if (!file.name || file.name.length > 180 || /[\\/\0]/.test(file.name)) {
       return NextResponse.json({ error: 'Nom de fichier invalide' }, { status: 400 })
@@ -129,14 +116,25 @@ export async function POST(
     }
 
     const storedName = `${crypto.randomUUID()}${extension}`
-    const relativeStorageKey = ['storage', 'uploads', user.id, id, storedName].join('/')
-    const targetDirectory = safeStoragePath(user.id, id)
-    storedAbsolutePath = safeStoragePath(user.id, id, storedName)
-    await mkdir(targetDirectory, { recursive: true })
-    await writeFile(storedAbsolutePath, bytes, { flag: 'wx' })
+    const relativeStorageKey = uploadStorageKey(user.id, id, storedName)
+    await writePrivateFile(relativeStorageKey, bytes)
+    storedStorageKey = relativeStorageKey
 
-    const text = extractText(extension, bytes)
-    const chunks = text.match(/[\s\S]{1,1500}/g)?.slice(0, 100) ?? []
+    let extracted
+    try {
+      extracted = await extractDocument(extension as SupportedDocumentExtension, bytes)
+    } catch (error) {
+      console.error('Document extraction rejected:', error)
+      await removePrivateFile(relativeStorageKey)
+      storedStorageKey = undefined
+      return NextResponse.json({
+        error: 'Le document est illisible ou endommagé. Vérifiez le fichier puis réessayez.',
+        code: 'DOCUMENT_EXTRACTION_FAILED',
+      }, { status: 422 })
+    }
+    const chunks = chunkExtractedDocument(extracted)
+    const requiresOcr = extracted.warnings.includes('PDF_SCAN_REQUIRES_OCR')
+    const extractionWarning = extracted.warnings.length ? extracted.warnings.join('\n').slice(0, 2_000) : null
     const documentId = crypto.randomUUID()
     const document = await db.$transaction(async (transaction) => {
       const currentCount = await transaction.document.count({ where: { projectId: id } })
@@ -152,30 +150,43 @@ export async function POST(
           mimeType: file.type,
           size: file.size,
           storageKey: relativeStorageKey,
-          status: chunks.length ? 'processed' : 'stored',
+          role,
+          status: chunks.length ? 'processed' : requiresOcr ? 'needs_ocr' : 'empty',
           chunkCount: chunks.length,
+          pageCount: extracted.pageCount,
+          contentHash: extracted.contentHash,
+          extractionError: extractionWarning,
+          processedAt: new Date(),
         },
       })
       if (chunks.length) {
         await transaction.embedding.createMany({
-          data: chunks.map((content, chunkIndex) => ({
+          data: chunks.map((chunk, chunkIndex) => ({
             id: crypto.randomUUID(),
             projectId: id,
             documentId,
             chunkIndex,
-            content,
+            pageNumber: chunk.pageNumber,
+            locator: chunk.locator,
+            content: chunk.content,
             embedding: '[]',
-            metadata: JSON.stringify({ documentId, chunkIndex, source: file.name }),
+            metadata: JSON.stringify({ documentId, chunkIndex, source: file.name, pageNumber: chunk.pageNumber, locator: chunk.locator, role }),
           })),
+        })
+      }
+      if (role === 'PROJECT_EVIDENCE' && chunks.length > 0) {
+        await transaction.project.updateMany({
+          where: { id, status: 'DRAFT' },
+          data: { status: 'SOURCES_READY' },
         })
       }
       return created
     }, { isolationLevel: 'Serializable' })
 
     const { storageKey: _storageKey, ...publicDocument } = document
-    return NextResponse.json({ document: publicDocument }, { status: 201 })
+    return NextResponse.json({ document: publicDocument, warnings: extracted.warnings }, { status: 201 })
   } catch (error) {
-    if (storedAbsolutePath) await unlink(storedAbsolutePath).catch(() => undefined)
+    if (storedStorageKey) await removePrivateFile(storedStorageKey).catch(() => undefined)
     if (error instanceof QuotaExceededError) {
       return NextResponse.json({ error: 'Limite de documents atteinte pour ce projet.', code: 'DOCUMENT_LIMIT_REACHED' }, { status: 402 })
     }
@@ -206,8 +217,7 @@ export async function DELETE(
       db.embedding.deleteMany({ where: { documentId: document.id, projectId: id } }),
       db.document.delete({ where: { id: document.id } }),
     ])
-    const absolutePath = safeStoragePath(user.id, id, document.filename)
-    await unlink(absolutePath).catch(() => undefined)
+    await removePrivateFile(uploadStorageKey(user.id, id, document.filename)).catch(() => undefined)
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('DELETE /api/projects/[id]/documents error:', error)

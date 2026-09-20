@@ -18,6 +18,8 @@ import {
   RotateCcw,
   FileDown,
   BookOpen,
+  ShieldCheck,
+  AlertTriangle,
 } from 'lucide-react'
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -162,6 +164,8 @@ export function ReportEditorView() {
   const [diffContent, setDiffContent] = useState<{ original: string; newContent: string } | null>(null)
   const [exporting, setExporting] = useState<string | null>(null)
   const [editingContent, setEditingContent] = useState<string | null>(null)
+  const [qualityIssues, setQualityIssues] = useState<NonNullable<ReportItem['qualityIssues']>>([])
+  const [approving, setApproving] = useState(false)
 
   // Load report
   const loadReport = useCallback(async () => {
@@ -172,6 +176,7 @@ export function ReportEditorView() {
       if (res.ok) {
         const data = await res.json()
         setReport(data.report)
+        setQualityIssues(Array.isArray(data.report.qualityIssues) ? data.report.qualityIssues : [])
         setReportAccess(data.access ?? null)
         setFullyVisibleSectionIds(Array.isArray(data.fullyVisibleSectionIds) ? data.fullyVisibleSectionIds : [])
         try {
@@ -206,9 +211,12 @@ export function ReportEditorView() {
         toast.error(failure.error || 'Impossible de sauvegarder la section')
         return
       }
+      const data = await res.json()
       setSections((previous) => previous.map((section) => section.id === activeSectionId
         ? { ...section, content: editingContent, status: 'completed' as const }
         : section))
+      setReport(data.report)
+      setQualityIssues(Array.isArray(data.report?.qualityIssues) ? data.report.qualityIssues : [])
       setEditingContent(null)
       toast.success('Section sauvegardée')
     } catch {
@@ -289,6 +297,27 @@ export function ReportEditorView() {
 
   function rejectDiff() {
     setDiffContent(null)
+  }
+
+  async function handleApproveReport() {
+    if (!selectedReportId) return
+    setApproving(true)
+    try {
+      const res = await secureFetch(`/api/reports/${selectedReportId}/approve`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setQualityIssues(Array.isArray(data.issues) ? data.issues : [])
+        toast.error(data.error || 'Le rapport doit encore être corrigé')
+        return
+      }
+      setReport(data.report)
+      setQualityIssues(Array.isArray(data.issues) ? data.issues : [])
+      toast.success('Rapport validé. Les exports sont maintenant disponibles.')
+    } catch {
+      toast.error('Erreur réseau pendant la validation')
+    } finally {
+      setApproving(false)
+    }
   }
 
   async function handleExport(format: 'docx' | 'pdf' | 'md') {
@@ -381,9 +410,17 @@ export function ReportEditorView() {
         <div className="flex items-center gap-2">
           <Button
             size="sm"
+            onClick={handleApproveReport}
+            disabled={approving || report.status === 'APPROVED'}
+          >
+            {approving ? <Loader2 className="mr-2 size-3 animate-spin" /> : <ShieldCheck className="mr-2 size-3" />}
+            {report.status === 'APPROVED' ? 'Rapport validé' : 'Valider le rapport'}
+          </Button>
+          <Button
+            size="sm"
             variant="outline"
             onClick={() => handleExport('md')}
-            disabled={exporting === 'md' || !canUseExportFormat('md')}
+            disabled={exporting === 'md' || !canUseExportFormat('md') || report.status !== 'APPROVED'}
           >
             {exporting === 'md' ? <Loader2 className="mr-2 size-3 animate-spin" /> : <FileDown className="mr-2 size-3" />}
             MD
@@ -392,7 +429,7 @@ export function ReportEditorView() {
             size="sm"
             variant="outline"
             onClick={() => handleExport('docx')}
-            disabled={exporting === 'docx' || !canUseExportFormat('docx')}
+            disabled={exporting === 'docx' || !canUseExportFormat('docx') || report.status !== 'APPROVED'}
           >
             {exporting === 'docx' ? <Loader2 className="mr-2 size-3 animate-spin" /> : <FileDown className="mr-2 size-3" />}
             DOCX
@@ -401,13 +438,31 @@ export function ReportEditorView() {
             size="sm"
             variant="outline"
             onClick={() => handleExport('pdf')}
-            disabled={exporting === 'pdf' || !canUseExportFormat('pdf')}
+            disabled={exporting === 'pdf' || !canUseExportFormat('pdf') || report.status !== 'APPROVED'}
           >
             {exporting === 'pdf' ? <Loader2 className="mr-2 size-3 animate-spin" /> : <Download className="mr-2 size-3" />}
             PDF
           </Button>
         </div>
       </motion.div>
+
+      {qualityIssues.length > 0 && (
+        <div className="border-b bg-muted/30 px-4 py-3">
+          <div className="mx-auto max-w-5xl space-y-2">
+            <p className="flex items-center gap-2 text-sm font-medium"><AlertTriangle className="size-4 text-amber-600" />Contrôle qualité</p>
+            {qualityIssues.map((issue, index) => (
+              <button
+                key={`${issue.code}-${issue.sectionId ?? index}`}
+                type="button"
+                className={`block w-full rounded-md border px-3 py-2 text-left text-xs ${issue.severity === 'blocking' ? 'border-destructive/30 bg-destructive/5' : 'border-amber-500/30 bg-amber-500/5'}`}
+                onClick={() => issue.sectionId && setActiveSectionId(issue.sectionId)}
+              >
+                <span className="font-medium">{issue.severity === 'blocking' ? 'À corriger' : 'À vérifier'} :</span> {issue.message}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Split View */}
       <motion.div variants={itemVariants} className="flex-1 overflow-hidden">

@@ -2,6 +2,12 @@ import { TIER_LABELS as CANONICAL_TIER_LABELS } from './billing'
 
 export const PROJECT_STATUS_LABELS: Record<string, string> = {
   DRAFT: 'Brouillon',
+  SOURCES_READY: 'Sources prêtes',
+  BRIEF_APPROVED: 'Brief validé',
+  OUTLINE_APPROVED: 'Plan validé',
+  DRAFTING: 'Rédaction en cours',
+  REVIEW_REQUIRED: 'À vérifier',
+  APPROVED: 'Validé',
   SUMMARIZING: 'Résumé en cours',
   SUMMARY_READY: 'Résumé prêt',
   GENERATING: 'Génération en cours',
@@ -11,6 +17,12 @@ export const PROJECT_STATUS_LABELS: Record<string, string> = {
 
 export const PROJECT_STATUS_COLORS: Record<string, string> = {
   DRAFT: 'bg-secondary text-secondary-foreground',
+  SOURCES_READY: 'bg-primary/10 text-primary',
+  BRIEF_APPROVED: 'bg-primary/10 text-primary',
+  OUTLINE_APPROVED: 'bg-primary/15 text-primary',
+  DRAFTING: 'bg-primary/15 text-primary',
+  REVIEW_REQUIRED: 'bg-amber-500/15 text-amber-700',
+  APPROVED: 'bg-emerald-500/15 text-emerald-700',
   SUMMARIZING: 'bg-primary/15 text-primary',
   SUMMARY_READY: 'bg-accent/15 text-accent-foreground',
   GENERATING: 'bg-primary/15 text-primary',
@@ -21,6 +33,8 @@ export const PROJECT_STATUS_COLORS: Record<string, string> = {
 export const JOB_STATUS_LABELS: Record<string, string> = {
   PENDING: 'En attente',
   PROCESSING: 'En cours',
+  RETRY_WAIT: 'Reprise programmée',
+  NEEDS_INPUT: 'Action requise',
   COMPLETED: 'Terminé',
   FAILED: 'Échoué',
   CANCELLED: 'Annulé',
@@ -29,6 +43,8 @@ export const JOB_STATUS_LABELS: Record<string, string> = {
 export const JOB_STATUS_COLORS: Record<string, string> = {
   PENDING: 'bg-secondary text-secondary-foreground',
   PROCESSING: 'bg-primary/15 text-primary',
+  RETRY_WAIT: 'bg-amber-500/15 text-amber-700',
+  NEEDS_INPUT: 'bg-amber-500/15 text-amber-700',
   COMPLETED: 'bg-primary text-primary-foreground',
   FAILED: 'bg-destructive/15 text-destructive',
   CANCELLED: 'bg-muted text-muted-foreground',

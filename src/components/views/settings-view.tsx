@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
+import { signOut } from 'next-auth/react'
 import {
   User,
   CreditCard,
@@ -64,6 +65,8 @@ export function SettingsView() {
   const [loading, setLoading] = useState(true)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [portalLoading, setPortalLoading] = useState(false)
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [deletingAccount, setDeletingAccount] = useState(false)
 
   // Profile form state (decorative)
   const [name, setName] = useState('')
@@ -83,7 +86,7 @@ export function SettingsView() {
         setUser(data.user)
         setQuota(data.quota ?? null)
         setName(data.user?.name ?? '')
-        setUniversity(data.user?.image ?? '') // placeholder — no university on user model
+        setUniversity(data.user?.university ?? '')
       }
     } catch {
       toast.error('Erreur lors du chargement du profil')
@@ -92,13 +95,44 @@ export function SettingsView() {
     }
   }
 
-  function handleSaveProfile() {
-    toast.success('Profil mis à jour (démonstration)')
+  async function handleSaveProfile() {
+    setSavingProfile(true)
+    try {
+      const response = await secureFetch('/api/user', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, university }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        toast.error(data.error ?? 'Impossible de sauvegarder le profil')
+        return
+      }
+      setUser((current) => current ? { ...current, ...data.user } : current)
+      toast.success('Profil mis à jour')
+    } catch {
+      toast.error('Erreur réseau pendant la sauvegarde')
+    } finally {
+      setSavingProfile(false)
+    }
   }
 
-  function handleDeleteAccount() {
-    setDeleteDialogOpen(false)
-    toast.success('Compte supprimé (démonstration)')
+  async function handleDeleteAccount() {
+    setDeletingAccount(true)
+    try {
+      const response = await secureFetch('/api/user', { method: 'DELETE' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        toast.error(data.error ?? 'Impossible de supprimer le compte')
+        return
+      }
+      setDeleteDialogOpen(false)
+      await signOut({ callbackUrl: '/' })
+    } catch {
+      toast.error('Erreur réseau pendant la suppression')
+    } finally {
+      setDeletingAccount(false)
+    }
   }
 
   async function handleOpenPortal() {
@@ -222,7 +256,10 @@ export function SettingsView() {
                 </div>
               </CardContent>
               <CardFooter className="border-t pt-4">
-                <Button onClick={handleSaveProfile}>Sauvegarder</Button>
+                <Button onClick={() => void handleSaveProfile()} disabled={savingProfile || !name.trim()}>
+                  {savingProfile && <Loader2 className="mr-2 size-4 animate-spin" />}
+                  Sauvegarder
+                </Button>
               </CardFooter>
             </Card>
           </motion.div>
@@ -361,8 +398,10 @@ export function SettingsView() {
                       </Button>
                       <Button
                         variant="destructive"
-                        onClick={handleDeleteAccount}
+                        onClick={() => void handleDeleteAccount()}
+                        disabled={deletingAccount}
                       >
+                        {deletingAccount && <Loader2 className="mr-2 size-4 animate-spin" />}
                         Confirmer la suppression
                       </Button>
                     </DialogFooter>
